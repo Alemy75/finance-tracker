@@ -81,3 +81,17 @@ export async function saveFinanceTransaction(entry: FinanceTransaction): Promise
   const complete = transactionComplete(transaction);
   await Promise.all([requestResult(transaction.objectStore("transactions").add(entry)), complete]);
 }
+
+export async function updateFinanceTransaction(entry: FinanceTransaction): Promise<void> {
+  const database = await openDatabase();
+  const transaction = database.transaction("transactions", "readwrite");
+  const complete = transactionComplete(transaction);
+  await Promise.all([requestResult(transaction.objectStore("transactions").put(entry)), complete]);
+}
+
+export async function deleteFinanceTransaction(entry: FinanceTransaction): Promise<void> {
+  const database = await openDatabase();
+  const transaction = database.transaction("transactions", "readwrite");
+  const complete = transactionComplete(transaction);
+  await Promise.all([requestResult(transaction.objectStore("transactions").put(entry)), complete]);
+}

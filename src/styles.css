@@ -97,6 +97,31 @@ input, select, textarea { font: inherit; color: inherit; }
 .transaction-amount { white-space: nowrap; font-size: 15px; font-variant-numeric: tabular-nums; }
 .transaction-amount.income { color: #315f55; }
 .section-intro { margin: 0 0 16px; color: #65717d; font-size: 13px; line-height: 1.5; }
+.history-section { max-width: 620px; }
+.month-picker { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.month-picker strong { text-transform: capitalize; font-size: 18px; }
+.month-picker button { width: 44px; height: 44px; border: 1px solid #d7dde1; border-radius: 11px; background: #fff; color: inherit; font-size: 29px; line-height: 1; }
+.history-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+.history-summary div { display: grid; gap: 5px; padding: 15px; background: #fff; border: 1px solid #e7eaee; border-radius: 14px; }
+.history-summary span { color: #65717d; font-size: 12px; }
+.history-summary strong { font-size: clamp(14px, 4vw, 18px); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.income-text { color: #315f55; }
+.history-view { margin-bottom: 12px; }
+.history-filters { display: flex; gap: 8px; margin-bottom: 12px; }
+.history-filters button { min-height: 38px; padding: 6px 12px; border: 1px solid #d7dde1; border-radius: 999px; background: #fff; color: #3d4b55; font-size: 13px; }
+.history-filters button[aria-pressed="true"] { background: #e6f1ed; border-color: #46746a; color: #315f55; font-weight: 700; }
+.history-list { max-width: none; }
+.history-row-actions { display: flex; gap: 14px; margin-top: 3px; }
+.history-row-actions button { border: 0; padding: 3px 0; background: none; color: #315f55; font-size: 12px; text-decoration: underline; }
+.history-row-actions button:last-child { color: #a63239; }
+.history-categories { max-width: none; }
+.history-categories small { display: inline-block; margin-left: 4px; font-size: 12px; }
+.history-edit { margin-bottom: 14px; }
+.history-edit h3 { margin: 0 0 4px; font-size: 17px; }
+.history-edit label { font-size: 13px; font-weight: 650; }
+.history-edit-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.secondary-button { min-height: 48px; border: 1px solid #cfd6db; border-radius: 11px; background: #fff; color: #315f55; font-weight: 700; }
+.month-picker button:focus-visible, .history-filters button:focus-visible, .history-row-actions button:focus-visible, .secondary-button:focus-visible { outline: 2px solid #46746a; outline-offset: 2px; }
 
 .mobile-nav { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; background: #fff; border-top: 1px solid #e7eaee; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
 .nav-button { min-height: 44px; border: 0; border-radius: 10px; background: transparent; color: #65717d; font-size: 13px; }
@@ -141,4 +166,10 @@ input, select, textarea { font: inherit; color: inherit; }
   .form-error { color: #ff9ca1; }
   .form-success, .transaction-amount.income, .extra-fields summary { color: #b8ddd1; }
   .signout-button { border-color: #535e68; }
+  .month-picker button, .history-summary div, .history-filters button, .secondary-button { background: #22262d; border-color: #383f49; color: #f3f4f6; }
+  .history-summary span { color: #aeb8c3; }
+  .history-filters button[aria-pressed="true"] { background: #263c37; color: #b8ddd1; border-color: #7aaf9e; }
+  .history-row-actions button { color: #b8ddd1; }
+  .history-row-actions button:last-child { color: #ff9ca1; }
+  .income-text { color: #b8ddd1; }
 }

@@ -28,3 +28,12 @@ test("расход с изменённой датой попадает в выб
   assert.equal(expensesByCategory(transactions, new Date(2026, 7, 15)).get("expense-groceries"), 15000);
   assert.equal(expensesByCategory(transactions, new Date(2026, 8, 15)).get("expense-groceries"), 5000);
 });
+
+test("удалённая операция не меняет остаток и отчёт", () => {
+  const deleted = {
+    type: "expense", amountKopeks: 20000, categoryId: "expense-groceries",
+    occurredAt: "2026-09-15T12:00:00.000Z", deletedAt: "2026-09-28T12:00:00.000Z"
+  };
+  assert.equal(cardBalance({ openingBalanceKopeks: 100000 }, [deleted]), 100000);
+  assert.equal(expensesByCategory([deleted], new Date(2026, 8, 15)).size, 0);
+});

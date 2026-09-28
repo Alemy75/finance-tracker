@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { AuthPanel } from "./AuthPanel";
 import { getAccountStatus, signOut } from "./authClient";
+import { History } from "./History";
 import { cardBalance, expensesByCategory, formatMoney, parseMoney } from "./finance";
 import type { Author, Category, FinanceTransaction, Settings, TransactionType } from "./finance";
-import { loadLocalData, saveFinanceTransaction, saveOpeningBalance } from "./localData";
+import { deleteFinanceTransaction, loadLocalData, saveFinanceTransaction, saveOpeningBalance, updateFinanceTransaction } from "./localData";
 import type { LocalData } from "./localData";
 
 type Page = "home" | "history" | "goals";
@@ -184,7 +185,7 @@ function QuickEntry({ categories, onSave }: {
 function TransactionList({ transactions, categories, limit }: {
   transactions: FinanceTransaction[]; categories: Category[]; limit?: number;
 }) {
-  const ordered = [...transactions].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+  const ordered = transactions.filter((entry) => !entry.deletedAt).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
   const visible = limit ? ordered.slice(0, limit) : ordered;
   if (visible.length === 0) {
     return <div className="empty-panel"><strong>Пока нет операций</strong><p>Добавьте первый доход или расход — запись появится здесь.</p></div>;
@@ -245,15 +246,6 @@ function Home({ data, onSave }: { data: LocalData; onSave: (entry: FinanceTransa
         <TransactionList transactions={data.transactions} categories={data.categories} limit={5} />
       </section>
     </>
-  );
-}
-
-function History({ data }: { data: LocalData }) {
-  return (
-    <section className="content-section top-section">
-      <p className="section-intro">Все записи на этом устройстве. Выбор месяца, фильтры и исправление записей появятся на следующем этапе.</p>
-      <TransactionList transactions={data.transactions} categories={data.categories} />
-    </section>
   );
 }
 
@@ -362,6 +354,19 @@ export default function App() {
     setData((current) => current ? { ...current, transactions: [...current.transactions, entry] } : current);
   }
 
+  async function updateEntry(entry: FinanceTransaction) {
+    await updateFinanceTransaction(entry);
+    setData((current) => current ? { ...current, transactions: current.transactions.map((item) => item.id === entry.id ? entry : item) } : current);
+  }
+
+  async function deleteEntry(id: string) {
+    const existing = data?.transactions.find((item) => item.id === id);
+    if (!existing) throw new Error("Запись не найдена.");
+    const deleted = { ...existing, deletedAt: new Date().toISOString() };
+    await deleteFinanceTransaction(deleted);
+    setData((current) => current ? { ...current, transactions: current.transactions.map((item) => item.id === id ? deleted : item) } : current);
+  }
+
   const title = pages.find((item) => item.id === page)?.label ?? "Главная";
   const connectionText = connection === "online" ? "Сеть есть" : connection === "offline" ? "Нет сети" : "Проверка связи";
   return (
@@ -391,7 +396,7 @@ export default function App() {
           ) : (
             <>
               {page === "home" && <Home data={data} onSave={saveEntry} />}
-              {page === "history" && <History data={data} />}
+              {page === "history" && <History data={data} onUpdate={updateEntry} onDelete={deleteEntry} />}
               {page === "goals" && <Goals balance={cardBalance(data.settings, data.transactions)} />}
             </>
           )}

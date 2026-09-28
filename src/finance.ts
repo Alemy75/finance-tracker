@@ -24,6 +24,7 @@ export interface FinanceTransaction {
   author: Author;
   note: string;
   goalId: string | null;
+  deletedAt?: string | null;
 }
 
 export const initialCategories: Category[] = [
@@ -58,7 +59,7 @@ export function parseMoney(input: string): number | null {
 
 export function cardBalance(settings: Settings, transactions: FinanceTransaction[]): number {
   return transactions.reduce(
-    (balance, transaction) => balance + (transaction.type === "income" ? 1 : -1) * transaction.amountKopeks,
+    (balance, transaction) => balance + (transaction.deletedAt ? 0 : (transaction.type === "income" ? 1 : -1) * transaction.amountKopeks),
     settings.openingBalanceKopeks
   );
 }
@@ -74,7 +75,7 @@ export function expensesByCategory(
 ): Map<string, number> {
   const totals = new Map<string, number>();
   for (const transaction of transactions) {
-    if (transaction.type !== "expense" || !isInMonth(transaction.occurredAt, month)) continue;
+    if (transaction.deletedAt || transaction.type !== "expense" || !isInMonth(transaction.occurredAt, month)) continue;
     totals.set(transaction.categoryId, (totals.get(transaction.categoryId) ?? 0) + transaction.amountKopeks);
   }
   return totals;
