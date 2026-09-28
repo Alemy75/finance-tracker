@@ -27,6 +27,12 @@ input, select, textarea { font: inherit; color: inherit; }
 .signout-button:disabled { opacity: .6; }
 .page-content { max-width: 900px; margin: 0 auto; padding: 0 20px 32px; }
 .local-notice { margin: 0 0 16px; padding: 10px 13px; border-radius: 11px; background: #eaf1ed; color: #315f55; font-size: 12px; line-height: 1.45; }
+.sync-error, .sync-conflict { max-width: 620px; margin-bottom: 14px; padding: 14px; border: 1px solid #e7c3c5; border-radius: 12px; background: #fff8f8; color: #74383c; font-size: 13px; line-height: 1.45; }
+.sync-error button { border: 0; background: none; color: inherit; text-decoration: underline; font-weight: 700; }
+.sync-conflict strong { display: block; }
+.sync-conflict p { margin: 6px 0 12px; }
+.sync-conflict-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sync-conflict-actions button { min-height: 38px; padding: 7px 10px; border: 1px solid #b68084; border-radius: 9px; background: #fff; color: #74383c; font-size: 12px; font-weight: 650; }
 
 .balance-card { background: #fff; border: 1px solid #e7eaee; border-radius: 20px; padding: 20px; margin-top: 12px; }
 .balance-value { display: block; margin: 6px 0 18px; font-size: clamp(32px, 9vw, 42px); letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
@@ -174,6 +180,8 @@ input, select, textarea { font: inherit; color: inherit; }
   .nav-button { color: #aeb8c3; }
   .nav-button[aria-current="page"] { background: #263c37; color: #b8ddd1; }
   .local-notice { background: #263c37; color: #b8ddd1; }
+  .sync-error, .sync-conflict { background: #38272a; border-color: #6b4045; color: #ffc3c6; }
+  .sync-conflict-actions button { background: #38272a; border-color: #a65e64; color: #ffc3c6; }
   .setup-card, .entry-card, .summary-card, .transaction-list { background: #22262d; border-color: #383f49; }
   .setup-card > p, .category-total, .transaction-details span, .section-intro, .extra-fields small { color: #aeb8c3; }
   .setup-card input, .entry-card input, .entry-card select, .entry-card textarea, .category-chip { background: #22262d; border-color: #535e68; }

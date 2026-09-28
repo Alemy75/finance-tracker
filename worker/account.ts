@@ -11,7 +11,7 @@ export async function hasAccount(database: D1Database): Promise<boolean> {
   return row !== null;
 }
 
-async function ensureLedger(database: D1Database, userId: string): Promise<void> {
+export async function ensureLedger(database: D1Database, userId: string): Promise<void> {
   const existing = await database.prepare("SELECT user_id FROM settings WHERE user_id = ?").bind(userId).first();
   if (existing) return;
 

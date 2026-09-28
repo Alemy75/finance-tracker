@@ -52,7 +52,7 @@ export function AuthPanel({ registered, onAuthenticated }: {
           {submitting ? "Подождите…" : registered ? "Войти" : "Создать профиль"}
         </button>
       </form>
-      <p className="setup-footnote">Пароль должен содержать не менее 12 символов. Записи, внесённые до входа, остаются на этом устройстве до этапа переноса и синхронизации.</p>
+      <p className="setup-footnote">Пароль должен содержать не менее 12 символов. Ранее внесённые записи перенесутся в общий профиль после входа.</p>
     </section>
   );
 }

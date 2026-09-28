@@ -1,5 +1,6 @@
 import { accountStatus, authRequest } from "./account";
 import type { Env } from "./auth";
+import { applyMutation, bootstrap } from "./sync";
 
 export default {
   async fetch(request, env) {
@@ -12,6 +13,9 @@ export default {
     if (pathname === "/api/account/status" && request.method === "GET") {
       return accountStatus(request, env);
     }
+
+    if (pathname === "/api/bootstrap" && request.method === "GET") return bootstrap(request, env);
+    if (pathname === "/api/sync" && request.method === "POST") return applyMutation(request, env);
 
     if (pathname.startsWith("/api/auth/")) {
       return authRequest(request, env);

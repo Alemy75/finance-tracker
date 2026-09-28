@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthPanel } from "./AuthPanel";
 import { getAccountStatus, signOut } from "./authClient";
 import { History } from "./History";
 import { Goals } from "./Goals";
 import { allocatedTotal, cardBalance, expensesByCategory, formatMoney, freeBalance, goalBalance, parseMoney } from "./finance";
 import type { Author, Category, FinanceTransaction, Goal, GoalMove, Settings, TransactionType } from "./finance";
-import { deleteFinanceTransaction, loadLocalData, saveFinanceTransaction, saveGoal, saveGoalMove, saveOpeningBalance, updateFinanceTransaction } from "./localData";
+import { deleteFinanceTransaction, loadLocalData, loadOutbox, retryLocalVersion, saveFinanceTransaction, saveGoal, saveGoalMove, saveOpeningBalance, updateFinanceTransaction, useRemoteVersion } from "./localData";
 import type { LocalData } from "./localData";
+import type { PendingMutation } from "./syncTypes";
+import { synchronize } from "./syncClient";
 
 type Page = "home" | "history" | "goals";
 type Connection = "checking" | "online" | "offline";
@@ -73,7 +75,7 @@ function OpeningSetup({ onSave }: { onSave: (settings: Settings) => Promise<void
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="primary-button" type="submit" disabled={saving}>{saving ? "Сохраняем…" : "Начать учёт"}</button>
       </form>
-      <p className="setup-footnote">Финансовые данные пока сохраняются только на этом устройстве. Синхронизация появится на следующем этапе.</p>
+      <p className="setup-footnote">Сумма сохранится на устройстве и после подключения появится в общем профиле.</p>
     </section>
   );
 }
@@ -278,6 +280,53 @@ export default function App() {
   const [authState, setAuthState] = useState<AuthState>("checking");
   const [authError, setAuthError] = useState("");
   const [signingOut, setSigningOut] = useState(false);
+  const [outbox, setOutbox] = useState<PendingMutation[]>([]);
+  const [syncing, setSyncing] = useState(false);
+  const [syncChecked, setSyncChecked] = useState(false);
+  const [syncError, setSyncError] = useState("");
+  const syncRunning = useRef(false);
+  const syncAgain = useRef(false);
+
+  const requestSync = useCallback(async () => {
+    if (!navigator.onLine) return;
+    if (syncRunning.current) { syncAgain.current = true; return; }
+    syncRunning.current = true;
+    setSyncing(true);
+    try {
+      do {
+        syncAgain.current = false;
+        try {
+          const result = await synchronize();
+          setData(result.data);
+          setOutbox(result.outbox);
+          setSyncError("");
+          setSyncChecked(true);
+        } catch (cause) {
+          const message = cause instanceof Error ? cause.message : "Не удалось синхронизировать данные.";
+          if (message === "Сессия завершилась. Войдите снова.") {
+            localStorage.removeItem(AUTH_MARKER);
+            setAuthState("login");
+          }
+          setSyncError(message);
+          break;
+        }
+      } while (syncAgain.current && navigator.onLine);
+    } finally {
+      syncRunning.current = false;
+      setSyncing(false);
+    }
+  }, []);
+
+  const refreshQueueAndSync = useCallback(async () => {
+    if (navigator.onLine) setSyncing(true);
+    try {
+      setOutbox(await loadOutbox());
+      void requestSync();
+    } catch {
+      setSyncing(false);
+      setSyncError("Изменение сохранено, но очередь не удалось прочитать. Обновите страницу.");
+    }
+  }, [requestSync]);
 
   const refreshAuth = useCallback(async (): Promise<void> => {
     try {
@@ -302,7 +351,7 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    void loadLocalData().then((result) => { if (active) setData(result); }).catch(() => {
+    void Promise.all([loadLocalData(), loadOutbox()]).then(([result, queued]) => { if (active) { setData(result); setOutbox(queued); } }).catch(() => {
       if (active) setLoadError("Не удалось открыть локальное хранилище. Проверьте настройки браузера и обновите страницу.");
     });
     async function checkConnection() {
@@ -332,6 +381,18 @@ export default function App() {
     };
   }, [refreshAuth]);
 
+  useEffect(() => {
+    if (authState !== "authenticated") return;
+    void requestSync();
+    const onVisible = () => { if (document.visibilityState === "visible") void requestSync(); };
+    window.addEventListener("online", requestSync);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("online", requestSync);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [authState, requestSync]);
+
   async function handleAuthenticated() {
     const status = await getAccountStatus();
     if (!status.user) throw new Error("Вход не подтвердился. Попробуйте ещё раз.");
@@ -345,6 +406,7 @@ export default function App() {
     try {
       await signOut();
       localStorage.removeItem(AUTH_MARKER);
+      setSyncChecked(false);
       setAuthState("login");
       setPage("home");
     } catch (cause) {
@@ -356,7 +418,8 @@ export default function App() {
 
   async function saveSettings(settings: Settings) {
     await saveOpeningBalance(settings);
-    setData((current) => current ? { ...current, settings } : current);
+    setData((current) => current ? { ...current, settings: { ...settings, version: 1 } } : current);
+    void refreshQueueAndSync();
   }
 
   async function saveEntry(entry: FinanceTransaction) {
@@ -369,7 +432,8 @@ export default function App() {
       }
     }
     await saveFinanceTransaction(entry);
-    setData((current) => current ? { ...current, transactions: [...current.transactions, entry] } : current);
+    setData((current) => current ? { ...current, transactions: [...current.transactions, { ...entry, version: 1 }] } : current);
+    void refreshQueueAndSync();
   }
 
   async function updateEntry(entry: FinanceTransaction) {
@@ -381,21 +445,24 @@ export default function App() {
     if (data.goals.some((goal) => goalBalance(goal.id, data.goalMoves, updatedTransactions) < 0)) {
       throw new Error("После исправления на одной из целей не хватит выделенных денег.");
     }
-    await updateFinanceTransaction(entry);
-    setData((current) => current ? { ...current, transactions: current.transactions.map((item) => item.id === entry.id ? entry : item) } : current);
+    const saved = await updateFinanceTransaction(entry);
+    setData((current) => current ? { ...current, transactions: current.transactions.map((item) => item.id === entry.id ? saved : item) } : current);
+    void refreshQueueAndSync();
   }
 
   async function deleteEntry(id: string) {
     const existing = data?.transactions.find((item) => item.id === id);
     if (!existing) throw new Error("Запись не найдена.");
     const deleted = { ...existing, deletedAt: new Date().toISOString() };
-    await deleteFinanceTransaction(deleted);
-    setData((current) => current ? { ...current, transactions: current.transactions.map((item) => item.id === id ? deleted : item) } : current);
+    const saved = await deleteFinanceTransaction(deleted);
+    setData((current) => current ? { ...current, transactions: current.transactions.map((item) => item.id === id ? saved : item) } : current);
+    void refreshQueueAndSync();
   }
 
   async function createGoal(goal: Goal) {
     await saveGoal(goal);
-    setData((current) => current ? { ...current, goals: [...current.goals, goal] } : current);
+    setData((current) => current ? { ...current, goals: [...current.goals, { ...goal, version: 1 }] } : current);
+    void refreshQueueAndSync();
   }
 
   async function moveGoalMoney(move: GoalMove) {
@@ -410,6 +477,18 @@ export default function App() {
     }
     await saveGoalMove(move);
     setData((current) => current ? { ...current, goalMoves: [...current.goalMoves, move] } : current);
+    void refreshQueueAndSync();
+  }
+
+  async function resolveConflict(mutation: PendingMutation, choice: "remote" | "local") {
+    try {
+      if (choice === "remote") await useRemoteVersion(mutation);
+      else await retryLocalVersion(mutation);
+      setData(await loadLocalData());
+      void refreshQueueAndSync();
+    } catch {
+      setSyncError("Не удалось применить решение. Обновите страницу и попробуйте ещё раз.");
+    }
   }
 
   const title = pages.find((item) => item.id === page)?.label ?? "Главная";
@@ -433,8 +512,17 @@ export default function App() {
             : authState === "setup" || authState === "login" ? <AuthPanel registered={authState === "login"} onAuthenticated={handleAuthenticated} />
             : authState === "error" ? <div className="empty-panel" role="alert"><p>{authError}</p><button className="primary-button" type="button" onClick={() => void refreshAuth()}>Повторить</button></div>
             : <>
-          {authState === "offline" && <div className="local-notice">Нет сети. Доступны только записи на этом устройстве.</div>}
-          {authState === "authenticated" && <div className="local-notice">Общий вход работает. Финансовые данные пока только на этом устройстве; синхронизация ещё не подключена.</div>}
+          {authState === "offline" && <div className="local-notice" role="status">Нет сети. Изменения сохраняются на устройстве и отправятся при подключении. Ожидают отправки: {outbox.length}.</div>}
+          {authState === "authenticated" && <div className="local-notice" role="status">{!syncChecked ? "Проверяем общие данные…" : syncing ? "Синхронизация…" : outbox.some((item) => item.state === "conflict") ? "Есть изменения, требующие вашего решения." : outbox.length > 0 ? `Ожидают отправки: ${outbox.length}` : "Все изменения синхронизированы."}</div>}
+          {syncError && authState === "authenticated" && <div className="sync-error" role="alert">{syncError} <button type="button" onClick={() => void requestSync()}>Повторить</button></div>}
+          {outbox.filter((item) => item.state === "conflict").map((item) => <div className="sync-conflict" key={item.id}>
+            <strong>Нужно решить конфликт: {item.kind === "transaction" ? "операция" : item.kind === "goalMove" ? "движение цели" : item.kind === "goal" ? "цель" : "стартовый остаток"}</strong>
+            <p>{item.reason}</p>
+            <div className="sync-conflict-actions">
+              <button type="button" onClick={() => void resolveConflict(item, "remote")}>Принять общую версию</button>
+              {item.kind !== "goal" && <button type="button" onClick={() => void resolveConflict(item, "local")}>{item.kind === "goalMove" ? "Повторить отправку" : "Сохранить мою версию"}</button>}
+            </div>
+          </div>)}
           {authError && <p className="form-error" role="alert">{authError}</p>}
           {loadError ? <div className="empty-panel" role="alert">{loadError}</div> : !data ? <div className="empty-panel">Загружаем данные…</div> : !data.settings ? (
             <OpeningSetup onSave={saveSettings} />

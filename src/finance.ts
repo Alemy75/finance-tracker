@@ -5,6 +5,7 @@ export interface Settings {
   id: "main";
   openingBalanceKopeks: number;
   startedAt: string;
+  version?: number;
 }
 
 export interface Category {
@@ -25,6 +26,7 @@ export interface FinanceTransaction {
   note: string;
   goalId: string | null;
   deletedAt?: string | null;
+  version?: number;
 }
 
 export interface Goal {
@@ -34,6 +36,7 @@ export interface Goal {
   createdAt: string;
   updatedAt: string;
   archivedAt?: string | null;
+  version?: number;
 }
 
 export interface GoalMove {
