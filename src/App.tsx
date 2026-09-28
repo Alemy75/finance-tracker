@@ -6,7 +6,7 @@ import { Goals } from "./Goals";
 import { SettingsPage } from "./SettingsPage";
 import { allocatedTotal, cardBalance, expensesByCategory, formatMoney, freeBalance, goalBalance, parseMoney } from "./finance";
 import type { Author, Category, FinanceTransaction, Goal, GoalMove, Settings, TransactionType } from "./finance";
-import { deleteFinanceTransaction, loadLocalData, loadOutbox, retryLocalVersion, saveFinanceTransaction, saveGoal, saveGoalMove, saveOpeningBalance, updateFinanceTransaction, useRemoteVersion } from "./localData";
+import { deleteFinanceTransaction, loadLocalData, loadOutbox, renameCategory, retryLocalVersion, saveCategory, saveFinanceTransaction, saveGoal, saveGoalMove, saveOpeningBalance, updateFinanceTransaction, useRemoteVersion } from "./localData";
 import type { LocalData } from "./localData";
 import type { PendingMutation } from "./syncTypes";
 import { synchronize } from "./syncClient";
@@ -456,6 +456,34 @@ export default function App() {
     void refreshQueueAndSync();
   }
 
+  function checkedCategoryName(type: TransactionType, name: string, exceptId?: string): string {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed.length > 80) throw new Error("Название категории должно содержать от 1 до 80 символов.");
+    if (data?.categories.some((item) => item.type === type && item.id !== exceptId
+      && item.name.toLocaleLowerCase("ru-RU") === trimmed.toLocaleLowerCase("ru-RU"))) {
+      throw new Error("Категория с таким названием уже есть.");
+    }
+    return trimmed;
+  }
+
+  async function createCategory(type: TransactionType, name: string) {
+    if (!data) throw new Error("Данные ещё загружаются.");
+    const saved = await saveCategory({ id: crypto.randomUUID(), type, name: checkedCategoryName(type, name),
+      sortOrder: Math.max(-1, ...data.categories.filter((item) => item.type === type).map((item) => item.sortOrder)) + 1 });
+    setData((current) => current ? { ...current, categories: [...current.categories, saved] } : current);
+    void refreshQueueAndSync();
+  }
+
+  async function renameCategoryName(id: string, name: string) {
+    const existing = data?.categories.find((item) => item.id === id);
+    if (!existing) throw new Error("Категория не найдена.");
+    const checked = checkedCategoryName(existing.type, name, id);
+    if (checked === existing.name) return;
+    const saved = await renameCategory({ ...existing, name: checked });
+    setData((current) => current ? { ...current, categories: current.categories.map((item) => item.id === id ? saved : item) } : current);
+    void refreshQueueAndSync();
+  }
+
   async function saveEntry(entry: FinanceTransaction) {
     if (entry.goalId) {
       if (entry.type !== "expense" || !data?.goals.some((goal) => goal.id === entry.goalId && !goal.archivedAt)) {
@@ -550,7 +578,7 @@ export default function App() {
           {authState === "authenticated" && <div className="local-notice" role="status">{!syncChecked ? "Проверяем общие данные…" : syncing ? "Синхронизация…" : outbox.some((item) => item.state === "conflict") ? "Есть изменения, требующие вашего решения." : outbox.length > 0 ? `Ожидают отправки: ${outbox.length}` : "Все изменения синхронизированы."}</div>}
           {syncError && authState === "authenticated" && <div className="sync-error" role="alert">{syncError} <button type="button" onClick={() => void requestSync()}>Повторить</button></div>}
           {outbox.filter((item) => item.state === "conflict").map((item) => <div className="sync-conflict" key={item.id}>
-            <strong>Нужно решить конфликт: {item.kind === "transaction" ? "операция" : item.kind === "goalMove" ? "движение цели" : item.kind === "goal" ? "цель" : "стартовый остаток"}</strong>
+            <strong>Нужно решить конфликт: {item.kind === "transaction" ? "операция" : item.kind === "category" ? "категория" : item.kind === "goalMove" ? "движение цели" : item.kind === "goal" ? "цель" : "стартовый остаток"}</strong>
             <p>{item.reason}</p>
             <div className="sync-conflict-actions">
               <button type="button" onClick={() => void resolveConflict(item, "remote")}>Принять общую версию</button>
@@ -565,7 +593,8 @@ export default function App() {
               {page === "home" && <Home data={data} onSave={saveEntry} onGoToGoals={() => setPage("goals")} />}
               {page === "history" && <History data={data} onUpdate={updateEntry} onDelete={deleteEntry} />}
               {page === "goals" && <Goals data={data} onCreate={createGoal} onMove={moveGoalMoney} />}
-              {page === "settings" && <SettingsPage online={authState === "authenticated" && connection === "online"} syncing={syncing} onExport={handleExport} />}
+              {page === "settings" && <SettingsPage categories={data.categories} online={authState === "authenticated" && connection === "online"}
+                syncing={syncing} onCreateCategory={createCategory} onRenameCategory={renameCategoryName} onExport={handleExport} />}
             </>
           )}
           </>}

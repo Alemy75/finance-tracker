@@ -1,7 +1,7 @@
 import { createAuth } from "./auth";
 import type { Env } from "./auth";
 import { ensureLedger } from "./account";
-import type { FinanceTransaction, Goal, GoalMove, Settings } from "../src/finance";
+import type { Category, FinanceTransaction, Goal, GoalMove, Settings } from "../src/finance";
 import type { PendingMutation, SyncEntity, SyncResult, SyncSnapshot } from "../src/syncTypes";
 
 type Row = Record<string, unknown>;
@@ -19,6 +19,10 @@ async function rows(database: D1Database, sql: string, user: string): Promise<Ro
 
 function setting(row: Row): Settings {
   return { id: "main", openingBalanceKopeks: Number(row.opening_balance_kopeks), startedAt: String(row.started_at), version: Number(row.version ?? 0) };
+}
+function category(row: Row): Category {
+  return { id: String(row.id), type: row.type as "expense" | "income", name: String(row.name),
+    sortOrder: Number(row.sort_order), version: Number(row.version) };
 }
 function goal(row: Row): Goal {
   return { id: String(row.id), name: String(row.name), targetKopeks: Number(row.target_kopeks),
@@ -40,6 +44,10 @@ async function currentEntity(database: D1Database, user: string, kind: PendingMu
   if (kind === "settings") {
     const row = await database.prepare(`SELECT settings.*, (SELECT COUNT(*) FROM change_log WHERE user_id = ? AND entity_type = 'settings') AS version FROM settings WHERE user_id = ?`).bind(user, user).first<Row>();
     return row ? setting(row) : null;
+  }
+  if (kind === "category") {
+    const row = await database.prepare("SELECT * FROM categories WHERE user_id = ? AND id = ?").bind(user, id).first<Row>();
+    return row ? category(row) : null;
   }
   const table = kind === "goal" ? "goals" : kind === "goalMove" ? "goal_moves" : "transactions";
   const row = await database.prepare(`SELECT * FROM ${table} WHERE user_id = ? AND id = ?`).bind(user, id).first<Row>();
@@ -84,7 +92,7 @@ export async function bootstrap(request: Request, env: Env): Promise<Response> {
   const database = env.DB;
   const [settingsRow, categoryRows, goalRows, moveRows, transactionRows, seq] = await Promise.all([
     database.prepare("SELECT settings.*, (SELECT COUNT(*) FROM change_log WHERE user_id = ? AND entity_type = 'settings') AS version FROM settings WHERE user_id = ?").bind(user, user).first<Row>(),
-    rows(database, "SELECT id, type, name, sort_order FROM categories WHERE user_id = ? AND archived_at IS NULL ORDER BY type, sort_order", user),
+    rows(database, "SELECT id, type, name, sort_order, version FROM categories WHERE user_id = ? AND archived_at IS NULL ORDER BY type, sort_order", user),
     rows(database, "SELECT * FROM goals WHERE user_id = ?", user),
     rows(database, "SELECT * FROM goal_moves WHERE user_id = ? ORDER BY occurred_at, id", user),
     rows(database, "SELECT * FROM transactions WHERE user_id = ?", user),
@@ -92,7 +100,7 @@ export async function bootstrap(request: Request, env: Env): Promise<Response> {
   ]);
   const snapshot: SyncSnapshot = {
     settings: settingsRow && Number(settingsRow.version) > 0 ? setting(settingsRow) : null,
-    categories: categoryRows.map((row) => ({ id: String(row.id), type: row.type as "expense" | "income", name: String(row.name), sortOrder: Number(row.sort_order) })),
+    categories: categoryRows.map(category),
     goals: goalRows.map(goal), goalMoves: moveRows.map(move), transactions: transactionRows.map(entry)
   };
   return json({ snapshot, seq });
@@ -103,7 +111,7 @@ export async function applyMutation(request: Request, env: Env): Promise<Respons
   if (!user) return json({ error: "Требуется вход." }, 401);
   await ensureLedger(env.DB, user);
   const mutation = await request.json().catch(() => null) as PendingMutation | null;
-  if (!mutation || !validId(mutation.id) || !validId(mutation.entityId) || !["settings", "goal", "goalMove", "transaction"].includes(mutation.kind)
+  if (!mutation || !validId(mutation.id) || !validId(mutation.entityId) || !["settings", "category", "goal", "goalMove", "transaction"].includes(mutation.kind)
     || !Number.isSafeInteger(mutation.baseVersion) || mutation.baseVersion < 0 || !mutation.payload || typeof mutation.payload !== "object") {
     return json({ error: "Неверный формат изменения." }, 400);
   }
@@ -124,6 +132,25 @@ export async function applyMutation(request: Request, env: Env): Promise<Respons
     payload = { id: "main", openingBalanceKopeks: Number(snapshot.openingBalanceKopeks), startedAt: String(snapshot.startedAt), version };
     statements.push(database.prepare("UPDATE settings SET opening_balance_kopeks = ?, started_at = ?, updated_at = ? WHERE user_id = ? AND changes() = 1")
       .bind(payload.openingBalanceKopeks, payload.startedAt, now, user));
+  } else if (mutation.kind === "category") {
+    if (!validId(snapshot.id) || snapshot.id !== mutation.entityId || !["expense", "income"].includes(String(snapshot.type))
+      || typeof snapshot.name !== "string" || !snapshot.name.trim() || snapshot.name.trim().length > 80
+      || !Number.isSafeInteger(snapshot.sortOrder) || Number(snapshot.sortOrder) < 0) return json({ error: "Неверные данные категории." }, 400);
+    if (current ? (current as Category).version !== mutation.baseVersion : mutation.baseVersion !== 0) {
+      return conflict(database, user, mutation, "Категория уже изменена на другом устройстве.");
+    }
+    if (current && ((current as Category).type !== snapshot.type || (current as Category).sortOrder !== snapshot.sortOrder)) {
+      return json({ error: "Тип и порядок категории менять нельзя." }, 400);
+    }
+    payload = { id: mutation.entityId, type: snapshot.type as "expense" | "income", name: snapshot.name.trim(),
+      sortOrder: Number(snapshot.sortOrder), version };
+    if (current) {
+      statements.push(database.prepare("UPDATE categories SET name = ?, updated_at = ?, version = ? WHERE user_id = ? AND id = ? AND changes() = 1")
+        .bind(payload.name, now, version, user, payload.id));
+    } else {
+      statements.push(database.prepare("INSERT INTO categories (user_id, id, type, name, sort_order, version, created_at, updated_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE changes() = 1")
+        .bind(user, payload.id, payload.type, payload.name, payload.sortOrder, version, now, now));
+    }
   } else if (mutation.kind === "goal") {
     if (current || mutation.baseVersion !== 0) return conflict(database, user, mutation, "Цель уже есть в общем профиле.");
     if (!validId(snapshot.id) || snapshot.id !== mutation.entityId || typeof snapshot.name !== "string" || !snapshot.name.trim() || snapshot.name.trim().length > 120 || !validMoney(snapshot.targetKopeks) || !validDate(snapshot.createdAt)) return json({ error: "Неверные данные цели." }, 400);

@@ -13,6 +13,7 @@ export interface Category {
   type: TransactionType;
   name: string;
   sortOrder: number;
+  version?: number;
 }
 
 export interface FinanceTransaction {

@@ -115,6 +115,29 @@ export async function saveOpeningBalance(settings: Settings): Promise<void> {
   await complete;
 }
 
+export async function saveCategory(category: Category): Promise<Category> {
+  const database = await openDatabase();
+  const transaction = database.transaction(["categories", "outbox"], "readwrite");
+  const complete = transactionComplete(transaction);
+  const saved = { ...category, version: 1 };
+  transaction.objectStore("categories").add(saved);
+  enqueue(transaction, "category", category.id, 0, saved);
+  await complete;
+  return saved;
+}
+
+export async function renameCategory(category: Category): Promise<Category> {
+  const database = await openDatabase();
+  const transaction = database.transaction(["categories", "outbox"], "readwrite");
+  const complete = transactionComplete(transaction);
+  const baseVersion = category.version ?? 1;
+  const saved = { ...category, version: baseVersion + 1 };
+  transaction.objectStore("categories").put(saved);
+  enqueue(transaction, "category", category.id, baseVersion, saved);
+  await complete;
+  return saved;
+}
+
 export async function saveFinanceTransaction(entry: FinanceTransaction): Promise<void> {
   const database = await openDatabase();
   const transaction = database.transaction(["transactions", "outbox"], "readwrite");
@@ -190,7 +213,7 @@ export async function applyRemoteSnapshot(snapshot: SyncSnapshot, protectedEntit
   const transaction = database.transaction(["settings", "categories", "transactions", "goals", "goalMoves"], "readwrite");
   const complete = transactionComplete(transaction);
   if (snapshot.settings && !protectedEntities.has("settings:main")) transaction.objectStore("settings").put(snapshot.settings);
-  for (const category of snapshot.categories) transaction.objectStore("categories").put(category);
+  for (const category of snapshot.categories) if (!protectedEntities.has(`category:${category.id}`)) transaction.objectStore("categories").put(category);
   for (const goal of snapshot.goals) if (!protectedEntities.has(`goal:${goal.id}`)) transaction.objectStore("goals").put(goal);
   for (const move of snapshot.goalMoves) if (!protectedEntities.has(`goalMove:${move.id}`)) transaction.objectStore("goalMoves").put(move);
   for (const entry of snapshot.transactions) if (!protectedEntities.has(`transaction:${entry.id}`)) transaction.objectStore("transactions").put(entry);
@@ -198,7 +221,7 @@ export async function applyRemoteSnapshot(snapshot: SyncSnapshot, protectedEntit
 }
 
 function storeName(kind: SyncKind): string {
-  return kind === "settings" ? "settings" : kind === "goal" ? "goals" : kind === "goalMove" ? "goalMoves" : "transactions";
+  return kind === "settings" ? "settings" : kind === "category" ? "categories" : kind === "goal" ? "goals" : kind === "goalMove" ? "goalMoves" : "transactions";
 }
 
 export async function useRemoteVersion(mutation: PendingMutation): Promise<void> {
@@ -219,9 +242,9 @@ export async function retryLocalVersion(mutation: PendingMutation): Promise<void
   const store = database.transaction(storeName(mutation.kind), "readonly").objectStore(storeName(mutation.kind));
   const local = await requestResult<SyncEntity | undefined>(store.get(mutation.entityId));
   if (!local) throw new Error("Локальная запись не найдена.");
-  const baseVersion = mutation.kind === "transaction" || mutation.kind === "settings"
+  const baseVersion = mutation.kind === "transaction" || mutation.kind === "settings" || mutation.kind === "category"
     ? Number((mutation.remote as { version?: number } | null)?.version ?? 0) : 0;
-  const payload = mutation.kind === "transaction" || mutation.kind === "settings"
+  const payload = mutation.kind === "transaction" || mutation.kind === "settings" || mutation.kind === "category"
     ? { ...local, version: baseVersion + 1 } as SyncEntity : local;
   const transaction = database.transaction(["outbox", storeName(mutation.kind)], "readwrite");
   const complete = transactionComplete(transaction);

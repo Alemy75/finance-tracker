@@ -152,7 +152,19 @@ input, select, textarea { font: inherit; color: inherit; }
 
 .mobile-nav { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5; display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; background: #fff; border-top: 1px solid #e7eaee; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
 .settings-section { max-width: 620px; }
+.settings-section > .content-section:first-child { margin-top: 12px; }
 .settings-section .entry-card p { margin: 0; line-height: 1.5; }
+.category-settings-list { list-style: none; margin: 0; padding: 0; }
+.category-settings-list li + li { border-top: 1px solid #e7eaee; }
+.category-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; }
+.category-settings-row strong { overflow-wrap: anywhere; font-size: 14px; }
+.category-name-form { display: grid; gap: 9px; }
+.category-settings-list + .category-name-form { border-top: 1px solid #e7eaee; padding-top: 15px; }
+.category-name-form label { font-size: 13px; font-weight: 650; }
+.category-add-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.category-add-row .primary-button { width: auto; padding: 0 16px; }
+.category-form-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.category-name-form input:focus-visible { outline: 2px solid #46746a; outline-offset: 2px; }
 .nav-button { min-height: 44px; border: 0; border-radius: 10px; background: transparent; color: #65717d; font-size: 13px; }
 .nav-button[aria-current="page"] { background: #e6f1ed; color: #315f55; font-weight: 700; }
 .nav-button:focus-visible { outline: 2px solid #46746a; outline-offset: 2px; }
@@ -208,5 +220,6 @@ input, select, textarea { font: inherit; color: inherit; }
   .text-button { color: #b8ddd1; }
   .goal-progress { background: #383f49; }
   .goal-move-form { border-color: #383f49; }
+  .category-settings-list li + li, .category-settings-list + .category-name-form { border-color: #383f49; }
   .goal-move-form input { background: #22262d; border-color: #535e68; }
 }
