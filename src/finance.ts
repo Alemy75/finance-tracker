@@ -27,6 +27,23 @@ export interface FinanceTransaction {
   deletedAt?: string | null;
 }
 
+export interface Goal {
+  id: string;
+  name: string;
+  targetKopeks: number;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string | null;
+}
+
+export interface GoalMove {
+  id: string;
+  goalId: string;
+  amountKopeks: number;
+  occurredAt: string;
+  createdAt: string;
+}
+
 export const initialCategories: Category[] = [
   { id: "expense-groceries", type: "expense", name: "Продукты", sortOrder: 0 },
   { id: "expense-transport", type: "expense", name: "Транспорт", sortOrder: 1 },
@@ -62,6 +79,19 @@ export function cardBalance(settings: Settings, transactions: FinanceTransaction
     (balance, transaction) => balance + (transaction.deletedAt ? 0 : (transaction.type === "income" ? 1 : -1) * transaction.amountKopeks),
     settings.openingBalanceKopeks
   );
+}
+
+export function goalBalance(goalId: string, moves: GoalMove[], transactions: FinanceTransaction[]): number {
+  const moved = moves.reduce((sum, move) => sum + (move.goalId === goalId ? move.amountKopeks : 0), 0);
+  return transactions.reduce((sum, entry) => sum - (!entry.deletedAt && entry.type === "expense" && entry.goalId === goalId ? entry.amountKopeks : 0), moved);
+}
+
+export function allocatedTotal(goals: Goal[], moves: GoalMove[], transactions: FinanceTransaction[]): number {
+  return goals.reduce((sum, goal) => sum + goalBalance(goal.id, moves, transactions), 0);
+}
+
+export function freeBalance(settings: Settings, goals: Goal[], moves: GoalMove[], transactions: FinanceTransaction[]): number {
+  return cardBalance(settings, transactions) - allocatedTotal(goals, moves, transactions);
 }
 
 export function isInMonth(isoDate: string, month: Date): boolean {

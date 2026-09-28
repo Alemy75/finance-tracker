@@ -1,14 +1,16 @@
 import { initialCategories } from "./finance";
-import type { Category, FinanceTransaction, Settings } from "./finance";
+import type { Category, FinanceTransaction, Goal, GoalMove, Settings } from "./finance";
 
 export interface LocalData {
   settings: Settings | null;
   categories: Category[];
   transactions: FinanceTransaction[];
+  goals: Goal[];
+  goalMoves: GoalMove[];
 }
 
 const DATABASE_NAME = "family-finance-local";
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 let databasePromise: Promise<IDBDatabase> | null = null;
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -43,6 +45,12 @@ function openDatabase(): Promise<IDBDatabase> {
         if (!database.objectStoreNames.contains("transactions")) {
           database.createObjectStore("transactions", { keyPath: "id" });
         }
+        if (!database.objectStoreNames.contains("goals")) {
+          database.createObjectStore("goals", { keyPath: "id" });
+        }
+        if (!database.objectStoreNames.contains("goalMoves")) {
+          database.createObjectStore("goalMoves", { keyPath: "id" });
+        }
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
@@ -59,13 +67,15 @@ function openDatabase(): Promise<IDBDatabase> {
 
 export async function loadLocalData(): Promise<LocalData> {
   const database = await openDatabase();
-  const transaction = database.transaction(["settings", "categories", "transactions"], "readonly");
-  const [settings, categories, transactions] = await Promise.all([
+  const transaction = database.transaction(["settings", "categories", "transactions", "goals", "goalMoves"], "readonly");
+  const [settings, categories, transactions, goals, goalMoves] = await Promise.all([
     requestResult<Settings | undefined>(transaction.objectStore("settings").get("main")),
     requestResult<Category[]>(transaction.objectStore("categories").getAll()),
-    requestResult<FinanceTransaction[]>(transaction.objectStore("transactions").getAll())
+    requestResult<FinanceTransaction[]>(transaction.objectStore("transactions").getAll()),
+    requestResult<Goal[]>(transaction.objectStore("goals").getAll()),
+    requestResult<GoalMove[]>(transaction.objectStore("goalMoves").getAll())
   ]);
-  return { settings: settings ?? null, categories, transactions };
+  return { settings: settings ?? null, categories, transactions, goals, goalMoves };
 }
 
 export async function saveOpeningBalance(settings: Settings): Promise<void> {
@@ -94,4 +104,18 @@ export async function deleteFinanceTransaction(entry: FinanceTransaction): Promi
   const transaction = database.transaction("transactions", "readwrite");
   const complete = transactionComplete(transaction);
   await Promise.all([requestResult(transaction.objectStore("transactions").put(entry)), complete]);
+}
+
+export async function saveGoal(goal: Goal): Promise<void> {
+  const database = await openDatabase();
+  const transaction = database.transaction("goals", "readwrite");
+  const complete = transactionComplete(transaction);
+  await Promise.all([requestResult(transaction.objectStore("goals").add(goal)), complete]);
+}
+
+export async function saveGoalMove(move: GoalMove): Promise<void> {
+  const database = await openDatabase();
+  const transaction = database.transaction("goalMoves", "readwrite");
+  const complete = transactionComplete(transaction);
+  await Promise.all([requestResult(transaction.objectStore("goalMoves").add(move)), complete]);
 }

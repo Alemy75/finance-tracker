@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { formatMoney, isInMonth, parseMoney } from "./finance";
-import type { Author, Category, FinanceTransaction, TransactionType } from "./finance";
+import { formatMoney, goalBalance, isInMonth, parseMoney } from "./finance";
+import type { Author, FinanceTransaction, TransactionType } from "./finance";
 import type { LocalData } from "./localData";
 
 type View = "operations" | "categories";
@@ -16,18 +16,20 @@ function localDateTime(iso: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function EditOperation({ entry, categories, onSave, onCancel }: {
+function EditOperation({ entry, data, onSave, onCancel }: {
   entry: FinanceTransaction;
-  categories: Category[];
+  data: LocalData;
   onSave: (entry: FinanceTransaction) => Promise<void>;
   onCancel: () => void;
 }) {
+  const categories = data.categories;
   const [type, setType] = useState<TransactionType>(entry.type);
   const [amount, setAmount] = useState((entry.amountKopeks / 100).toFixed(2).replace(".", ","));
   const [categoryId, setCategoryId] = useState(entry.categoryId);
   const [occurredAt, setOccurredAt] = useState(localDateTime(entry.occurredAt));
   const [author, setAuthor] = useState<Author>(entry.author);
   const [note, setNote] = useState(entry.note);
+  const [goalId, setGoalId] = useState<string | null>(entry.goalId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const availableCategories = categories.filter((category) => category.type === type)
@@ -36,6 +38,7 @@ function EditOperation({ entry, categories, onSave, onCancel }: {
   function changeType(nextType: TransactionType) {
     setType(nextType);
     setCategoryId(categories.find((category) => category.type === nextType)?.id ?? "");
+    if (nextType === "income") setGoalId(null);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -51,9 +54,9 @@ function EditOperation({ entry, categories, onSave, onCancel }: {
     try {
       await onSave({ ...entry, type, amountKopeks, categoryId,
         occurredAt: occurredAt === localDateTime(entry.occurredAt) ? entry.occurredAt : parsedDate.toISOString(),
-        author, note: note.trim() });
-    } catch {
-      setError("Не удалось сохранить исправление на устройстве.");
+        author, note: note.trim(), goalId: type === "expense" ? goalId : null });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось сохранить исправление на устройстве.");
     } finally {
       setSaving(false);
     }
@@ -74,6 +77,13 @@ function EditOperation({ entry, categories, onSave, onCancel }: {
       </select>
       <label htmlFor="edit-date">Дата и время</label>
       <input id="edit-date" type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} required />
+      {type === "expense" && data.goals.length > 0 && <>
+        <label htmlFor="edit-goal">Оплатить из цели</label>
+        <select id="edit-goal" value={goalId ?? ""} onChange={(event) => setGoalId(event.target.value || null)}>
+          <option value="">Нет, обычный расход</option>
+          {data.goals.filter((goal) => !goal.archivedAt).map((goal) => <option key={goal.id} value={goal.id}>{goal.name} · {formatMoney(goalBalance(goal.id, data.goalMoves, data.transactions))}</option>)}
+        </select>
+      </>}
       <label htmlFor="edit-author">Кто внёс запись</label>
       <select id="edit-author" value={author ?? ""} onChange={(event) => setAuthor((event.target.value || null) as Author)}>
         <option value="">Не указано</option><option value="self">Я</option><option value="wife">Жена</option>
@@ -155,7 +165,7 @@ export function History({ data, onUpdate, onDelete }: {
           ))}
         </div>
         {error && <p className="form-error" role="alert">{error}</p>}
-        {editing && <EditOperation key={editing.id} entry={editing} categories={data.categories} onSave={save} onCancel={() => setEditingId(null)} />}
+        {editing && <EditOperation key={editing.id} entry={editing} data={data} onSave={save} onCancel={() => setEditingId(null)} />}
         {visible.length === 0 ? <div className="empty-panel"><strong>За этот месяц записей нет</strong><p>Выберите другой месяц или добавьте операцию на главной.</p></div> : (
           <ul className="transaction-list history-list">
             {visible.map((entry) => <li key={entry.id}>
@@ -163,6 +173,7 @@ export function History({ data, onUpdate, onDelete }: {
                 <strong>{data.categories.find((category) => category.id === entry.categoryId)?.name ?? "Категория"}</strong>
                 <span>{dateFormatter.format(new Date(entry.occurredAt))}{entry.author === "self" ? " · Я" : entry.author === "wife" ? " · Жена" : ""}</span>
                 {entry.note && <span className="transaction-note">{entry.note}</span>}
+                {entry.goalId && <span>Из цели: {data.goals.find((goal) => goal.id === entry.goalId)?.name ?? "Цель"}</span>}
                 <div className="history-row-actions">
                   <button type="button" onClick={() => setEditingId(entry.id)}>Исправить</button>
                   <button type="button" onClick={() => void remove(entry.id)}>Удалить</button>

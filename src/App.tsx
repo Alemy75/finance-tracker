@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { AuthPanel } from "./AuthPanel";
 import { getAccountStatus, signOut } from "./authClient";
 import { History } from "./History";
-import { cardBalance, expensesByCategory, formatMoney, parseMoney } from "./finance";
-import type { Author, Category, FinanceTransaction, Settings, TransactionType } from "./finance";
-import { deleteFinanceTransaction, loadLocalData, saveFinanceTransaction, saveOpeningBalance, updateFinanceTransaction } from "./localData";
+import { Goals } from "./Goals";
+import { allocatedTotal, cardBalance, expensesByCategory, formatMoney, freeBalance, goalBalance, parseMoney } from "./finance";
+import type { Author, Category, FinanceTransaction, Goal, GoalMove, Settings, TransactionType } from "./finance";
+import { deleteFinanceTransaction, loadLocalData, saveFinanceTransaction, saveGoal, saveGoalMove, saveOpeningBalance, updateFinanceTransaction } from "./localData";
 import type { LocalData } from "./localData";
 
 type Page = "home" | "history" | "goals";
@@ -77,26 +78,30 @@ function OpeningSetup({ onSave }: { onSave: (settings: Settings) => Promise<void
   );
 }
 
-function QuickEntry({ categories, onSave }: {
-  categories: Category[];
+function QuickEntry({ data, onSave }: {
+  data: LocalData;
   onSave: (entry: FinanceTransaction) => Promise<void>;
 }) {
+  const categories = data.categories;
   const [type, setType] = useState<TransactionType>("expense");
   const [categoryId, setCategoryId] = useState("expense-groceries");
   const [amount, setAmount] = useState("");
   const [occurredAtInput, setOccurredAtInput] = useState("");
   const [author, setAuthor] = useState<Author>(null);
   const [note, setNote] = useState("");
+  const [goalId, setGoalId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
   const availableCategories = categories.filter((category) => category.type === type)
     .sort((a, b) => a.sortOrder - b.sortOrder);
+  const fundedGoals = data.goals.filter((goal) => !goal.archivedAt && goalBalance(goal.id, data.goalMoves, data.transactions) > 0);
 
   function chooseType(nextType: TransactionType) {
     setType(nextType);
     setCategoryId(categories.find((category) => category.type === nextType)?.id ?? "");
+    if (nextType === "income") setGoalId(null);
     setMessage("");
     setError("");
   }
@@ -125,15 +130,16 @@ function QuickEntry({ categories, onSave }: {
     try {
       await onSave({
         id: crypto.randomUUID(), type, amountKopeks, categoryId,
-        occurredAt: chosenDate.toISOString(), createdAt, author, note: note.trim(), goalId: null
+        occurredAt: chosenDate.toISOString(), createdAt, author, note: note.trim(), goalId: type === "expense" ? goalId : null
       });
       setAmount("");
       setOccurredAtInput("");
       setAuthor(null);
       setNote("");
+      setGoalId(null);
       setMessage("Запись сохранена на этом устройстве. Можно добавить следующую.");
-    } catch {
-      setError("Не удалось сохранить запись на устройстве. Попробуйте ещё раз.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось сохранить запись на устройстве.");
     } finally {
       setSaving(false);
     }
@@ -165,6 +171,13 @@ function QuickEntry({ categories, onSave }: {
             <label htmlFor="entry-date">Дата и время</label>
             <input id="entry-date" type="datetime-local" value={occurredAtInput} onChange={(event) => setOccurredAtInput(event.target.value)} />
             <small>Если оставить пустым, возьмём момент сохранения.</small>
+            {type === "expense" && fundedGoals.length > 0 && <>
+              <label htmlFor="entry-goal">Оплатить из цели</label>
+              <select id="entry-goal" value={goalId ?? ""} onChange={(event) => setGoalId(event.target.value || null)}>
+                <option value="">Нет, обычный расход</option>
+                {fundedGoals.map((goal) => <option key={goal.id} value={goal.id}>{goal.name} · {formatMoney(goalBalance(goal.id, data.goalMoves, data.transactions))}</option>)}
+              </select>
+            </>}
             <label htmlFor="entry-author">Кто внёс запись</label>
             <select id="entry-author" value={author ?? ""} onChange={(event) => setAuthor((event.target.value || null) as Author)}>
               <option value="">Не указано</option><option value="self">Я</option><option value="wife">Жена</option>
@@ -208,10 +221,12 @@ function TransactionList({ transactions, categories, limit }: {
   );
 }
 
-function Home({ data, onSave }: { data: LocalData; onSave: (entry: FinanceTransaction) => Promise<void> }) {
+function Home({ data, onSave, onGoToGoals }: { data: LocalData; onSave: (entry: FinanceTransaction) => Promise<void>; onGoToGoals: () => void }) {
   const month = new Date();
   const monthLabel = new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric" }).format(month);
   const balance = cardBalance(data.settings!, data.transactions);
+  const allocated = allocatedTotal(data.goals, data.goalMoves, data.transactions);
+  const free = freeBalance(data.settings!, data.goals, data.goalMoves, data.transactions);
   const grouped = expensesByCategory(data.transactions, month);
   const monthlyExpenses = [...grouped.values()].reduce((sum, amount) => sum + amount, 0);
   const categoryTotals = [...grouped.entries()]
@@ -221,13 +236,19 @@ function Home({ data, onSave }: { data: LocalData; onSave: (entry: FinanceTransa
     <>
       <section className="balance-card" aria-label="Остатки">
         <span className="eyebrow">Свободно</span>
-        <strong className="balance-value">{formatMoney(balance)}</strong>
+        <strong className="balance-value">{formatMoney(free)}</strong>
         <div className="balance-breakdown">
           <div><span>На карте</span><strong>{formatMoney(balance)}</strong></div>
-          <div><span>В целях</span><strong>{formatMoney(0)}</strong></div>
+          <div><span>В целях</span><strong>{formatMoney(allocated)}</strong></div>
         </div>
       </section>
-      <QuickEntry categories={data.categories} onSave={onSave} />
+      {data.goals.some((goal) => !goal.archivedAt) && <section className="content-section home-goals">
+        <div className="section-heading"><h2>Цели</h2><button className="text-button" type="button" onClick={onGoToGoals}>Все цели</button></div>
+        <div className="home-goal-list">{data.goals.filter((goal) => !goal.archivedAt).map((goal) => <div key={goal.id}>
+          <strong>{goal.name}</strong><span>{formatMoney(goalBalance(goal.id, data.goalMoves, data.transactions))} из {formatMoney(goal.targetKopeks)}</span>
+        </div>)}</div>
+      </section>}
+      <QuickEntry data={data} onSave={onSave} />
       <section className="content-section">
         <div className="section-heading"><h2>Расходы за месяц</h2><span>{monthLabel}</span></div>
         {categoryTotals.length ? (
@@ -246,17 +267,6 @@ function Home({ data, onSave }: { data: LocalData; onSave: (entry: FinanceTransa
         <TransactionList transactions={data.transactions} categories={data.categories} limit={5} />
       </section>
     </>
-  );
-}
-
-function Goals({ balance }: { balance: number }) {
-  return (
-    <section className="content-section top-section">
-      <div className="balance-card compact-card">
-        <span className="eyebrow">Свободно для целей</span><strong className="compact-value">{formatMoney(balance)}</strong>
-      </div>
-      <div className="empty-panel large-empty"><strong>Целей пока нет</strong><p>Выделение денег на цели появится на следующем этапе.</p></div>
-    </section>
   );
 }
 
@@ -350,11 +360,27 @@ export default function App() {
   }
 
   async function saveEntry(entry: FinanceTransaction) {
+    if (entry.goalId) {
+      if (entry.type !== "expense" || !data?.goals.some((goal) => goal.id === entry.goalId && !goal.archivedAt)) {
+        throw new Error("Выберите существующую цель для расхода.");
+      }
+      if (entry.amountKopeks > goalBalance(entry.goalId, data.goalMoves, data.transactions)) {
+        throw new Error("На этой цели недостаточно выделенных денег.");
+      }
+    }
     await saveFinanceTransaction(entry);
     setData((current) => current ? { ...current, transactions: [...current.transactions, entry] } : current);
   }
 
   async function updateEntry(entry: FinanceTransaction) {
+    if (!data) throw new Error("Данные ещё загружаются.");
+    if (entry.goalId && (entry.type !== "expense" || !data.goals.some((goal) => goal.id === entry.goalId && !goal.archivedAt))) {
+      throw new Error("Выберите существующую цель для расхода.");
+    }
+    const updatedTransactions = data.transactions.map((item) => item.id === entry.id ? entry : item);
+    if (data.goals.some((goal) => goalBalance(goal.id, data.goalMoves, updatedTransactions) < 0)) {
+      throw new Error("После исправления на одной из целей не хватит выделенных денег.");
+    }
     await updateFinanceTransaction(entry);
     setData((current) => current ? { ...current, transactions: current.transactions.map((item) => item.id === entry.id ? entry : item) } : current);
   }
@@ -365,6 +391,25 @@ export default function App() {
     const deleted = { ...existing, deletedAt: new Date().toISOString() };
     await deleteFinanceTransaction(deleted);
     setData((current) => current ? { ...current, transactions: current.transactions.map((item) => item.id === id ? deleted : item) } : current);
+  }
+
+  async function createGoal(goal: Goal) {
+    await saveGoal(goal);
+    setData((current) => current ? { ...current, goals: [...current.goals, goal] } : current);
+  }
+
+  async function moveGoalMoney(move: GoalMove) {
+    if (!data?.settings || !data.goals.some((goal) => goal.id === move.goalId && !goal.archivedAt)) {
+      throw new Error("Цель не найдена.");
+    }
+    if (move.amountKopeks > 0 && move.amountKopeks > freeBalance(data.settings, data.goals, data.goalMoves, data.transactions)) {
+      throw new Error("Свободных денег для этой суммы недостаточно.");
+    }
+    if (move.amountKopeks < 0 && -move.amountKopeks > goalBalance(move.goalId, data.goalMoves, data.transactions)) {
+      throw new Error("Нельзя вернуть больше, чем выделено на цель.");
+    }
+    await saveGoalMove(move);
+    setData((current) => current ? { ...current, goalMoves: [...current.goalMoves, move] } : current);
   }
 
   const title = pages.find((item) => item.id === page)?.label ?? "Главная";
@@ -395,9 +440,9 @@ export default function App() {
             <OpeningSetup onSave={saveSettings} />
           ) : (
             <>
-              {page === "home" && <Home data={data} onSave={saveEntry} />}
+              {page === "home" && <Home data={data} onSave={saveEntry} onGoToGoals={() => setPage("goals")} />}
               {page === "history" && <History data={data} onUpdate={updateEntry} onDelete={deleteEntry} />}
-              {page === "goals" && <Goals balance={cardBalance(data.settings, data.transactions)} />}
+              {page === "goals" && <Goals data={data} onCreate={createGoal} onMove={moveGoalMoney} />}
             </>
           )}
           </>}
