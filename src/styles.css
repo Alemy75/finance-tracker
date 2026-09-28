@@ -22,6 +22,9 @@ input, select, textarea { font: inherit; color: inherit; }
 .connection-dot { width: 7px; height: 7px; border-radius: 50%; background: #a8b0b7; }
 .connection.online .connection-dot { background: #46746a; }
 .connection.offline .connection-dot { background: #ad4d50; }
+.header-actions { display: flex; align-items: center; gap: 12px; }
+.signout-button { border: 1px solid #cfd6db; border-radius: 9px; background: transparent; color: inherit; padding: 7px 10px; font-size: 12px; }
+.signout-button:disabled { opacity: .6; }
 .page-content { max-width: 900px; margin: 0 auto; padding: 0 20px 32px; }
 .local-notice { margin: 0 0 16px; padding: 10px 13px; border-radius: 11px; background: #eaf1ed; color: #315f55; font-size: 12px; line-height: 1.45; }
 
@@ -137,4 +140,5 @@ input, select, textarea { font: inherit; color: inherit; }
   .category-total strong { color: #f3f4f6; }
   .form-error { color: #ff9ca1; }
   .form-success, .transaction-amount.income, .extra-fields summary { color: #b8ddd1; }
+  .signout-button { border-color: #535e68; }
 }

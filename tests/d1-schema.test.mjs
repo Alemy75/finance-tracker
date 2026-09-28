@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 const migration = readFileSync(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8");
+const authMigration = readFileSync(new URL("../migrations/0002_better_auth.sql", import.meta.url), "utf8");
 const now = "2026-09-28T12:00:00.000Z";
 
 function createDatabase() {
@@ -52,6 +53,18 @@ test("повтор мутации отклоняется, журнал изме�
     change.run("family-a", "settings", "family-a", "upsert", "{}", now);
     change.run("family-a", "category", "groceries", "upsert", "{}", now);
     assert.deepEqual(database.prepare("SELECT seq FROM change_log ORDER BY seq").all().map((row) => row.seq), [1, 2]);
+  } finally {
+    database.close();
+  }
+});
+
+test("схема авторизации допускает только один семейный профиль", () => {
+  const database = createDatabase();
+  try {
+    database.exec(authMigration);
+    const insert = database.prepare('INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 0, ?, ?)');
+    insert.run("family-a", "Семья", "family-a@example.test", now, now);
+    assert.throws(() => insert.run("family-b", "Другая семья", "family-b@example.test", now, now), /UNIQUE/);
   } finally {
     database.close();
   }

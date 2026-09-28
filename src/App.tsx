@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { AuthPanel } from "./AuthPanel";
+import { getAccountStatus, signOut } from "./authClient";
 import { cardBalance, expensesByCategory, formatMoney, parseMoney } from "./finance";
 import type { Author, Category, FinanceTransaction, Settings, TransactionType } from "./finance";
 import { loadLocalData, saveFinanceTransaction, saveOpeningBalance } from "./localData";
@@ -6,6 +8,8 @@ import type { LocalData } from "./localData";
 
 type Page = "home" | "history" | "goals";
 type Connection = "checking" | "online" | "offline";
+type AuthState = "checking" | "setup" | "login" | "authenticated" | "offline" | "error";
+const AUTH_MARKER = "family-finance-authenticated";
 
 const pages: { id: Page; label: string }[] = [
   { id: "home", label: "Главная" },
@@ -67,7 +71,7 @@ function OpeningSetup({ onSave }: { onSave: (settings: Settings) => Promise<void
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="primary-button" type="submit" disabled={saving}>{saving ? "Сохраняем…" : "Начать учёт"}</button>
       </form>
-      <p className="setup-footnote">Сейчас данные сохраняются только на этом устройстве. Общий вход и синхронизация появятся на следующих этапах.</p>
+      <p className="setup-footnote">Финансовые данные пока сохраняются только на этом устройстве. Синхронизация появится на следующем этапе.</p>
     </section>
   );
 }
@@ -269,6 +273,30 @@ export default function App() {
   const [connection, setConnection] = useState<Connection>("checking");
   const [data, setData] = useState<LocalData | null>(null);
   const [loadError, setLoadError] = useState("");
+  const [authState, setAuthState] = useState<AuthState>("checking");
+  const [authError, setAuthError] = useState("");
+  const [signingOut, setSigningOut] = useState(false);
+
+  const refreshAuth = useCallback(async (): Promise<void> => {
+    try {
+      const status = await getAccountStatus();
+      setAuthError("");
+      if (status.user) {
+        localStorage.setItem(AUTH_MARKER, status.user.id);
+        setAuthState("authenticated");
+      } else {
+        localStorage.removeItem(AUTH_MARKER);
+        setAuthState(status.registered ? "login" : "setup");
+      }
+    } catch (cause) {
+      if (!navigator.onLine && localStorage.getItem(AUTH_MARKER)) {
+        setAuthState("offline");
+      } else {
+        setAuthError(cause instanceof Error ? cause.message : "Не удалось проверить вход.");
+        setAuthState("error");
+      }
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -288,14 +316,41 @@ export default function App() {
       }
     }
     void checkConnection();
+    void refreshAuth();
+    window.addEventListener("online", refreshAuth);
+    window.addEventListener("offline", refreshAuth);
     window.addEventListener("online", checkConnection);
     window.addEventListener("offline", checkConnection);
     return () => {
       active = false;
       window.removeEventListener("online", checkConnection);
       window.removeEventListener("offline", checkConnection);
+      window.removeEventListener("online", refreshAuth);
+      window.removeEventListener("offline", refreshAuth);
     };
-  }, []);
+  }, [refreshAuth]);
+
+  async function handleAuthenticated() {
+    const status = await getAccountStatus();
+    if (!status.user) throw new Error("Вход не подтвердился. Попробуйте ещё раз.");
+    localStorage.setItem(AUTH_MARKER, status.user.id);
+    setAuthState("authenticated");
+  }
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    setAuthError("");
+    try {
+      await signOut();
+      localStorage.removeItem(AUTH_MARKER);
+      setAuthState("login");
+      setPage("home");
+    } catch (cause) {
+      setAuthError(cause instanceof Error ? cause.message : "Не удалось выйти.");
+    } finally {
+      setSigningOut(false);
+    }
+  }
 
   async function saveSettings(settings: Settings) {
     await saveOpeningBalance(settings);
@@ -313,15 +368,24 @@ export default function App() {
     <div className="app-layout">
       <aside className="desktop-sidebar">
         <div className="brand"><span className="brand-mark" aria-hidden="true">₽</span><span>Семейные финансы</span></div>
-        <Navigation page={page} onSelect={setPage} className="desktop-nav" />
+        {(authState === "authenticated" || authState === "offline") && <Navigation page={page} onSelect={setPage} className="desktop-nav" />}
       </aside>
       <div className="app-main">
         <header className="app-header">
-          <div><span className="eyebrow">Семейные финансы</span><h1>{title}</h1></div>
-          <div className={`connection ${connection}`} role="status"><span className="connection-dot" aria-hidden="true" />{connectionText}</div>
+          <div><span className="eyebrow">Семейные финансы</span><h1>{authState === "authenticated" || authState === "offline" ? title : "Общий профиль"}</h1></div>
+          <div className="header-actions">
+            <div className={`connection ${connection}`} role="status"><span className="connection-dot" aria-hidden="true" />{connectionText}</div>
+            {authState === "authenticated" && <button className="signout-button" type="button" onClick={handleSignOut} disabled={signingOut}>{signingOut ? "Выходим…" : "Выйти"}</button>}
+          </div>
         </header>
         <main className="page-content">
-          <div className="local-notice">Данные пока только на этом устройстве. Общая синхронизация ещё не подключена.</div>
+          {authState === "checking" ? <div className="empty-panel">Проверяем вход…</div>
+            : authState === "setup" || authState === "login" ? <AuthPanel registered={authState === "login"} onAuthenticated={handleAuthenticated} />
+            : authState === "error" ? <div className="empty-panel" role="alert"><p>{authError}</p><button className="primary-button" type="button" onClick={() => void refreshAuth()}>Повторить</button></div>
+            : <>
+          {authState === "offline" && <div className="local-notice">Нет сети. Доступны только записи на этом устройстве.</div>}
+          {authState === "authenticated" && <div className="local-notice">Общий вход работает. Финансовые данные пока только на этом устройстве; синхронизация ещё не подключена.</div>}
+          {authError && <p className="form-error" role="alert">{authError}</p>}
           {loadError ? <div className="empty-panel" role="alert">{loadError}</div> : !data ? <div className="empty-panel">Загружаем данные…</div> : !data.settings ? (
             <OpeningSetup onSave={saveSettings} />
           ) : (
@@ -331,8 +395,9 @@ export default function App() {
               {page === "goals" && <Goals balance={cardBalance(data.settings, data.transactions)} />}
             </>
           )}
+          </>}
         </main>
-        <Navigation page={page} onSelect={setPage} className="mobile-nav" />
+        {(authState === "authenticated" || authState === "offline") && <Navigation page={page} onSelect={setPage} className="mobile-nav" />}
       </div>
     </div>
   );

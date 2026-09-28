@@ -6,7 +6,7 @@ import { VitePWA } from "vite-plugin-pwa";
 export default defineConfig({
   plugins: [
     react(),
-    cloudflare(),
+    cloudflare(process.env.FINANCE_TEST_STATE_DIR ? { persistState: { path: process.env.FINANCE_TEST_STATE_DIR } } : {}),
     VitePWA({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "apple-touch-icon.png"],
