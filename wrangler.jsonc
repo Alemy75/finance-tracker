@@ -6,5 +6,14 @@
   "assets": {
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
-  }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "family-finance-tracker",
+      "database_id": "00000000-0000-0000-0000-000000000000", // Replace with the ID from `wrangler d1 create` before deployment.
+      "preview_database_id": "family-finance-local",
+      "migrations_dir": "migrations"
+    }
+  ]
 }
