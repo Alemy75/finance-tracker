@@ -3,6 +3,7 @@ import { AuthPanel } from "./AuthPanel";
 import { getAccountStatus, signOut } from "./authClient";
 import { History } from "./History";
 import { Goals } from "./Goals";
+import { SettingsPage } from "./SettingsPage";
 import { allocatedTotal, cardBalance, expensesByCategory, formatMoney, freeBalance, goalBalance, parseMoney } from "./finance";
 import type { Author, Category, FinanceTransaction, Goal, GoalMove, Settings, TransactionType } from "./finance";
 import { deleteFinanceTransaction, loadLocalData, loadOutbox, retryLocalVersion, saveFinanceTransaction, saveGoal, saveGoalMove, saveOpeningBalance, updateFinanceTransaction, useRemoteVersion } from "./localData";
@@ -10,7 +11,7 @@ import type { LocalData } from "./localData";
 import type { PendingMutation } from "./syncTypes";
 import { synchronize } from "./syncClient";
 
-type Page = "home" | "history" | "goals";
+type Page = "home" | "history" | "goals" | "settings";
 type Connection = "checking" | "online" | "offline";
 type AuthState = "checking" | "setup" | "login" | "authenticated" | "offline" | "error";
 const AUTH_MARKER = "family-finance-authenticated";
@@ -18,7 +19,8 @@ const AUTH_MARKER = "family-finance-authenticated";
 const pages: { id: Page; label: string }[] = [
   { id: "home", label: "Главная" },
   { id: "history", label: "История" },
-  { id: "goals", label: "Цели" }
+  { id: "goals", label: "Цели" },
+  { id: "settings", label: "Настройки" }
 ];
 
 const transactionDate = new Intl.DateTimeFormat("ru-RU", {
@@ -317,6 +319,38 @@ export default function App() {
     }
   }, []);
 
+  async function handleExport() {
+    if (authState !== "authenticated" || !navigator.onLine) throw new Error("Для выгрузки нужно подключение к сети и вход в профиль.");
+    if (syncRunning.current) throw new Error("Дождитесь окончания синхронизации и попробуйте снова.");
+    syncRunning.current = true;
+    setSyncing(true);
+    try {
+      const result = await synchronize();
+      setData(result.data);
+      setOutbox(result.outbox);
+      setSyncChecked(true);
+      setSyncError("");
+      if (result.outbox.length || (await loadOutbox()).length) {
+        throw new Error("Остались изменения, которые не попали в общий профиль. Разрешите конфликты и повторите выгрузку.");
+      }
+      const response = await fetch("/api/export", { credentials: "same-origin", cache: "no-store" });
+      if (!response.ok) throw new Error(response.status === 401 ? "Сессия завершилась. Войдите снова." : "Не удалось получить резервную копию.");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `family-finance-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } finally {
+      syncRunning.current = false;
+      setSyncing(false);
+      if (syncAgain.current) void requestSync();
+    }
+  }
+
   const refreshQueueAndSync = useCallback(async () => {
     if (navigator.onLine) setSyncing(true);
     try {
@@ -531,6 +565,7 @@ export default function App() {
               {page === "home" && <Home data={data} onSave={saveEntry} onGoToGoals={() => setPage("goals")} />}
               {page === "history" && <History data={data} onUpdate={updateEntry} onDelete={deleteEntry} />}
               {page === "goals" && <Goals data={data} onCreate={createGoal} onMove={moveGoalMoney} />}
+              {page === "settings" && <SettingsPage online={authState === "authenticated" && connection === "online"} syncing={syncing} onExport={handleExport} />}
             </>
           )}
           </>}

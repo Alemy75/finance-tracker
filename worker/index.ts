@@ -1,5 +1,6 @@
 import { accountStatus, authRequest } from "./account";
 import type { Env } from "./auth";
+import { exportLedger } from "./export";
 import { applyMutation, bootstrap } from "./sync";
 
 export default {
@@ -15,6 +16,7 @@ export default {
     }
 
     if (pathname === "/api/bootstrap" && request.method === "GET") return bootstrap(request, env);
+    if (pathname === "/api/export" && request.method === "GET") return exportLedger(request, env);
     if (pathname === "/api/sync" && request.method === "POST") return applyMutation(request, env);
 
     if (pathname.startsWith("/api/auth/")) {

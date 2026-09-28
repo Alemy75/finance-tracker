@@ -150,7 +150,9 @@ input, select, textarea { font: inherit; color: inherit; }
 .goal-create { margin-top: 20px; }
 .text-button:focus-visible, .goal-move-form input:focus-visible { outline: 2px solid #46746a; outline-offset: 2px; }
 
-.mobile-nav { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; background: #fff; border-top: 1px solid #e7eaee; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
+.mobile-nav { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5; display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; background: #fff; border-top: 1px solid #e7eaee; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
+.settings-section { max-width: 620px; }
+.settings-section .entry-card p { margin: 0; line-height: 1.5; }
 .nav-button { min-height: 44px; border: 0; border-radius: 10px; background: transparent; color: #65717d; font-size: 13px; }
 .nav-button[aria-current="page"] { background: #e6f1ed; color: #315f55; font-weight: 700; }
 .nav-button:focus-visible { outline: 2px solid #46746a; outline-offset: 2px; }
