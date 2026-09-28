@@ -34,7 +34,7 @@ export function AuthPanel({ registered, onAuthenticated }: {
       <h2>{registered ? "Войти в семейный профиль" : "Создать семейный профиль"}</h2>
       <p>{registered
         ? "Используйте общий email и пароль на обоих устройствах."
-        : "Профиль создаётся один раз. Для первого запуска нужен ключ из локального файла .dev.vars."}</p>
+        : "Профиль создаётся один раз. Для первого запуска нужен ключ, который хранится у владельца приложения."}</p>
       <form onSubmit={submit}>
         <label htmlFor="auth-email">Email</label>
         <input id="auth-email" type="email" autoComplete="email" value={email}
