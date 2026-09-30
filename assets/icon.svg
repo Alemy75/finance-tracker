@@ -14,8 +14,8 @@
       <stop offset="1" stop-color="#e3ecdf"/>
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <rect width="512" height="512" rx="112" fill="url(#glow)"/>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <rect width="512" height="512" fill="url(#glow)"/>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="42">
     <path d="M204 142V374M204 142H274A70 70 0 0 1 274 282H164" stroke="url(#ink)"/>
     <path d="M164 334H288" stroke="#c8e87a"/>

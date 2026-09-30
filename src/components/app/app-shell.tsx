@@ -11,7 +11,12 @@ export type Connection = "checking" | "online" | "offline";
 
 export function BrandMark({ className }: { className?: string }) {
   return (
-    <span aria-hidden="true" className={cn("grid size-9 place-items-center rounded-[11px] gradient-forest text-[19px] font-bold text-on-forest shadow-sm shadow-forest/30", className)}>₽</span>
+    <span aria-hidden="true" className={cn("grid size-9 place-items-center rounded-[11px] gradient-forest shadow-sm shadow-forest/30", className)}>
+      <svg viewBox="140 120 232 276" className="size-[18px]" fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth="42">
+        <path d="M204 142V374M204 142H274A70 70 0 0 1 274 282H164" stroke="var(--on-forest)" />
+        <path d="M164 334H288" stroke="var(--lime)" />
+      </svg>
+    </span>
   );
 }
 
