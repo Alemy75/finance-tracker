@@ -1,5 +1,5 @@
 import { initialCategories } from "@/finance";
-import type { Category, FinanceTransaction, Goal, GoalMove, Settings } from "@/finance";
+import type { Category, FinanceTransaction, Goal, GoalMove, Settings, Transfer } from "@/finance";
 import type { PendingMutation, SyncEntity, SyncKind, SyncSnapshot } from "@/syncTypes";
 
 export interface LocalData {
@@ -8,10 +8,11 @@ export interface LocalData {
   transactions: FinanceTransaction[];
   goals: Goal[];
   goalMoves: GoalMove[];
+  transfers: Transfer[];
 }
 
 const DATABASE_NAME = "family-finance-local";
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -58,6 +59,9 @@ export function createLocalDb() {
           if (!database.objectStoreNames.contains("goalMoves")) {
             database.createObjectStore("goalMoves", { keyPath: "id" });
           }
+          if (!database.objectStoreNames.contains("transfers")) {
+            database.createObjectStore("transfers", { keyPath: "id" });
+          }
           if (!database.objectStoreNames.contains("outbox")) {
             database.createObjectStore("outbox", { keyPath: "sequence", autoIncrement: true });
           }
@@ -99,15 +103,16 @@ export function createLocalDb() {
 
   async function loadLocalData(): Promise<LocalData> {
     const database = await openDatabase();
-    const transaction = database.transaction(["settings", "categories", "transactions", "goals", "goalMoves"], "readonly");
-    const [settings, categories, transactions, goals, goalMoves] = await Promise.all([
+    const transaction = database.transaction(["settings", "categories", "transactions", "goals", "goalMoves", "transfers"], "readonly");
+    const [settings, categories, transactions, goals, goalMoves, transfers] = await Promise.all([
       requestResult<Settings | undefined>(transaction.objectStore("settings").get("main")),
       requestResult<Category[]>(transaction.objectStore("categories").getAll()),
       requestResult<FinanceTransaction[]>(transaction.objectStore("transactions").getAll()),
       requestResult<Goal[]>(transaction.objectStore("goals").getAll()),
-      requestResult<GoalMove[]>(transaction.objectStore("goalMoves").getAll())
+      requestResult<GoalMove[]>(transaction.objectStore("goalMoves").getAll()),
+      requestResult<Transfer[]>(transaction.objectStore("transfers").getAll())
     ]);
-    return { settings: settings ?? null, categories, transactions, goals, goalMoves };
+    return { settings: settings ?? null, categories, transactions, goals, goalMoves, transfers };
   }
 
   async function saveOpeningBalance(settings: Settings): Promise<void> {
@@ -118,6 +123,43 @@ export function createLocalDb() {
     transaction.objectStore("settings").add(saved);
     enqueue(transaction, "settings", "main", 0, saved);
     await complete;
+  }
+
+  /** Versioned update of the settings, used to enter or correct the starting cash. */
+  async function updateSettings(settings: Settings): Promise<Settings> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["settings", "outbox"], "readwrite");
+    const complete = transactionComplete(transaction);
+    const baseVersion = settings.version ?? 1;
+    const saved = { ...settings, version: baseVersion + 1 };
+    transaction.objectStore("settings").put(saved);
+    enqueue(transaction, "settings", "main", baseVersion, saved);
+    await complete;
+    return saved;
+  }
+
+  async function saveTransfer(transfer: Transfer): Promise<Transfer> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["transfers", "outbox"], "readwrite");
+    const complete = transactionComplete(transaction);
+    const saved = { ...transfer, version: 1 };
+    transaction.objectStore("transfers").add(saved);
+    enqueue(transaction, "transfer", transfer.id, 0, saved);
+    await complete;
+    return saved;
+  }
+
+  /** Correction or soft deletion (`deletedAt`) of a transfer. */
+  async function updateTransfer(transfer: Transfer): Promise<Transfer> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["transfers", "outbox"], "readwrite");
+    const complete = transactionComplete(transaction);
+    const baseVersion = transfer.version ?? 1;
+    const saved = { ...transfer, version: baseVersion + 1 };
+    transaction.objectStore("transfers").put(saved);
+    enqueue(transaction, "transfer", transfer.id, baseVersion, saved);
+    await complete;
+    return saved;
   }
 
   async function saveCategory(category: Category): Promise<Category> {
@@ -215,8 +257,9 @@ export function createLocalDb() {
 
   async function applyRemoteSnapshot(snapshot: SyncSnapshot, protectedEntities: Set<string>): Promise<void> {
     const database = await openDatabase();
-    const transaction = database.transaction(["settings", "categories", "transactions", "goals", "goalMoves"], "readwrite");
+    const transaction = database.transaction(["settings", "categories", "transactions", "goals", "goalMoves", "transfers"], "readwrite");
     const complete = transactionComplete(transaction);
+    for (const transfer of snapshot.transfers ?? []) if (!protectedEntities.has(`transfer:${transfer.id}`)) transaction.objectStore("transfers").put(transfer);
     if (snapshot.settings && !protectedEntities.has("settings:main")) transaction.objectStore("settings").put(snapshot.settings);
     for (const category of snapshot.categories) if (!protectedEntities.has(`category:${category.id}`)) transaction.objectStore("categories").put(category);
     for (const goal of snapshot.goals) if (!protectedEntities.has(`goal:${goal.id}`)) transaction.objectStore("goals").put(goal);
@@ -226,7 +269,8 @@ export function createLocalDb() {
   }
 
   function storeName(kind: SyncKind): string {
-    return kind === "settings" ? "settings" : kind === "category" ? "categories" : kind === "goal" ? "goals" : kind === "goalMove" ? "goalMoves" : "transactions";
+    return kind === "settings" ? "settings" : kind === "category" ? "categories" : kind === "goal" ? "goals"
+      : kind === "goalMove" ? "goalMoves" : kind === "transfer" ? "transfers" : "transactions";
   }
 
   async function acceptRemoteVersion(mutation: PendingMutation): Promise<void> {
@@ -247,9 +291,9 @@ export function createLocalDb() {
     const store = database.transaction(storeName(mutation.kind), "readonly").objectStore(storeName(mutation.kind));
     const local = await requestResult<SyncEntity | undefined>(store.get(mutation.entityId));
     if (!local) throw new Error("Локальная запись не найдена.");
-    const baseVersion = mutation.kind === "transaction" || mutation.kind === "settings" || mutation.kind === "category"
-      ? Number((mutation.remote as { version?: number } | null)?.version ?? 0) : 0;
-    const payload = mutation.kind === "transaction" || mutation.kind === "settings" || mutation.kind === "category"
+    const versioned = mutation.kind === "transaction" || mutation.kind === "transfer" || mutation.kind === "settings" || mutation.kind === "category";
+    const baseVersion = versioned ? Number((mutation.remote as { version?: number } | null)?.version ?? 0) : 0;
+    const payload = versioned
       ? { ...local, version: baseVersion + 1 } as SyncEntity : local;
     const transaction = database.transaction(["outbox", storeName(mutation.kind)], "readwrite");
     const complete = transactionComplete(transaction);
@@ -260,7 +304,7 @@ export function createLocalDb() {
   }
 
   return {
-    loadLocalData, saveOpeningBalance, saveCategory, renameCategory, saveFinanceTransaction, updateFinanceTransaction,
+    loadLocalData, saveOpeningBalance, updateSettings, saveTransfer, updateTransfer, saveCategory, renameCategory, saveFinanceTransaction, updateFinanceTransaction,
     deleteFinanceTransaction, saveGoal, saveGoalMove, loadOutbox, removeMutation, markMutationConflict, applyRemoteSnapshot,
     acceptRemoteVersion, retryLocalVersion
   };

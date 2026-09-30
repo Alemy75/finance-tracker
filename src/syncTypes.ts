@@ -1,7 +1,7 @@
-import type { Category, FinanceTransaction, Goal, GoalMove, Settings } from "./finance";
+import type { Category, FinanceTransaction, Goal, GoalMove, Settings, Transfer } from "./finance";
 
-export type SyncKind = "settings" | "category" | "goal" | "goalMove" | "transaction";
-export type SyncEntity = Settings | Category | Goal | GoalMove | FinanceTransaction;
+export type SyncKind = "settings" | "category" | "goal" | "goalMove" | "transaction" | "transfer";
+export type SyncEntity = Settings | Category | Goal | GoalMove | FinanceTransaction | Transfer;
 
 export interface PendingMutation {
   sequence?: number;
@@ -21,6 +21,7 @@ export interface SyncSnapshot {
   goals: Goal[];
   goalMoves: GoalMove[];
   transactions: FinanceTransaction[];
+  transfers: Transfer[];
 }
 
 export interface SyncResult {

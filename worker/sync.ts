@@ -1,7 +1,7 @@
 import { createAuth } from "./auth";
 import type { Env } from "./auth";
 import { ensureLedger } from "./account";
-import type { Category, FinanceTransaction, Goal, GoalMove, Settings } from "../src/finance";
+import type { Account, Category, FinanceTransaction, Goal, GoalMove, Settings, Transfer } from "../src/finance";
 import type { PendingMutation, SyncEntity, SyncResult, SyncSnapshot } from "../src/syncTypes";
 
 type Row = Record<string, unknown>;
@@ -18,7 +18,9 @@ async function rows(database: D1Database, sql: string, user: string): Promise<Ro
 }
 
 function setting(row: Row): Settings {
-  return { id: "main", openingBalanceKopeks: Number(row.opening_balance_kopeks), startedAt: String(row.started_at), version: Number(row.version ?? 0) };
+  return { id: "main", openingBalanceKopeks: Number(row.opening_balance_kopeks),
+    openingCashKopeks: row.opening_cash_kopeks === null || row.opening_cash_kopeks === undefined ? null : Number(row.opening_cash_kopeks),
+    startedAt: String(row.started_at), version: Number(row.version ?? 0) };
 }
 function category(row: Row): Category {
   return { id: String(row.id), type: row.type as "expense" | "income", name: String(row.name),
@@ -37,7 +39,12 @@ function entry(row: Row): FinanceTransaction {
   return { id: String(row.id), type: row.type as "expense" | "income", amountKopeks: Number(row.amount_kopeks),
     categoryId: String(row.category_id), occurredAt: String(row.occurred_at), createdAt: String(row.created_at),
     author: row.author as "self" | "wife" | null, note: String(row.note), goalId: row.goal_id as string | null,
-    deletedAt: row.deleted_at as string | null, version: Number(row.version) };
+    account: (row.account ?? "card") as Account, deletedAt: row.deleted_at as string | null, version: Number(row.version) };
+}
+function transfer(row: Row): Transfer {
+  return { id: String(row.id), from: row.from_account as Account, amountKopeks: Number(row.amount_kopeks),
+    occurredAt: String(row.occurred_at), createdAt: String(row.created_at), author: row.author as "self" | "wife" | null,
+    note: String(row.note), deletedAt: row.deleted_at as string | null, version: Number(row.version) };
 }
 
 async function currentEntity(database: D1Database, user: string, kind: PendingMutation["kind"], id: string): Promise<SyncEntity | null> {
@@ -49,9 +56,9 @@ async function currentEntity(database: D1Database, user: string, kind: PendingMu
     const row = await database.prepare("SELECT * FROM categories WHERE user_id = ? AND id = ?").bind(user, id).first<Row>();
     return row ? category(row) : null;
   }
-  const table = kind === "goal" ? "goals" : kind === "goalMove" ? "goal_moves" : "transactions";
+  const table = kind === "goal" ? "goals" : kind === "goalMove" ? "goal_moves" : kind === "transfer" ? "transfers" : "transactions";
   const row = await database.prepare(`SELECT * FROM ${table} WHERE user_id = ? AND id = ?`).bind(user, id).first<Row>();
-  return row ? kind === "goal" ? goal(row) : kind === "goalMove" ? move(row) : entry(row) : null;
+  return row ? kind === "goal" ? goal(row) : kind === "goalMove" ? move(row) : kind === "transfer" ? transfer(row) : entry(row) : null;
 }
 
 async function ledgerSequence(database: D1Database, user: string): Promise<number> {
@@ -69,7 +76,7 @@ async function goalBalance(database: D1Database, user: string, goalId: string): 
 
 async function freeBalance(database: D1Database, user: string): Promise<number> {
   const row = await database.prepare(`SELECT
-    (SELECT opening_balance_kopeks FROM settings WHERE user_id = ?) +
+    (SELECT opening_balance_kopeks + COALESCE(opening_cash_kopeks, 0) FROM settings WHERE user_id = ?) +
     COALESCE((SELECT SUM(CASE WHEN type = 'income' THEN amount_kopeks ELSE -amount_kopeks END) FROM transactions WHERE user_id = ? AND deleted_at IS NULL), 0) -
     COALESCE((SELECT SUM(amount_kopeks) FROM goal_moves WHERE user_id = ?), 0) +
     COALESCE((SELECT SUM(amount_kopeks) FROM transactions WHERE user_id = ? AND goal_id IS NOT NULL AND type = 'expense' AND deleted_at IS NULL), 0) AS amount`)
@@ -80,6 +87,7 @@ async function freeBalance(database: D1Database, user: string): Promise<number> 
 function validId(value: unknown): value is string { return typeof value === "string" && value.length > 0 && value.length <= 120; }
 function validMoney(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
 function validDate(value: unknown): value is string { return typeof value === "string" && !Number.isNaN(Date.parse(value)); }
+function validAccount(value: unknown): value is Account { return value === "card" || value === "cash"; }
 
 async function conflict(database: D1Database, user: string, mutation: PendingMutation, reason: string, retryable = false): Promise<Response> {
   return json({ status: "conflict", reason, remote: await currentEntity(database, user, mutation.kind, mutation.entityId), retryable } satisfies SyncResult, 409);
@@ -90,18 +98,20 @@ export async function bootstrap(request: Request, env: Env): Promise<Response> {
   if (!user) return json({ error: "Требуется вход." }, 401);
   await ensureLedger(env.DB, user);
   const database = env.DB;
-  const [settingsRow, categoryRows, goalRows, moveRows, transactionRows, seq] = await Promise.all([
+  const [settingsRow, categoryRows, goalRows, moveRows, transactionRows, transferRows, seq] = await Promise.all([
     database.prepare("SELECT settings.*, (SELECT COUNT(*) FROM change_log WHERE user_id = ? AND entity_type = 'settings') AS version FROM settings WHERE user_id = ?").bind(user, user).first<Row>(),
     rows(database, "SELECT id, type, name, sort_order, version FROM categories WHERE user_id = ? AND archived_at IS NULL ORDER BY type, sort_order", user),
     rows(database, "SELECT * FROM goals WHERE user_id = ?", user),
     rows(database, "SELECT * FROM goal_moves WHERE user_id = ? ORDER BY occurred_at, id", user),
     rows(database, "SELECT * FROM transactions WHERE user_id = ?", user),
+    rows(database, "SELECT * FROM transfers WHERE user_id = ?", user),
     ledgerSequence(database, user)
   ]);
   const snapshot: SyncSnapshot = {
     settings: settingsRow && Number(settingsRow.version) > 0 ? setting(settingsRow) : null,
     categories: categoryRows.map(category),
-    goals: goalRows.map(goal), goalMoves: moveRows.map(move), transactions: transactionRows.map(entry)
+    goals: goalRows.map(goal), goalMoves: moveRows.map(move), transactions: transactionRows.map(entry),
+    transfers: transferRows.map(transfer)
   };
   return json({ snapshot, seq });
 }
@@ -111,7 +121,7 @@ export async function applyMutation(request: Request, env: Env): Promise<Respons
   if (!user) return json({ error: "Требуется вход." }, 401);
   await ensureLedger(env.DB, user);
   const mutation = await request.json().catch(() => null) as PendingMutation | null;
-  if (!mutation || !validId(mutation.id) || !validId(mutation.entityId) || !["settings", "category", "goal", "goalMove", "transaction"].includes(mutation.kind)
+  if (!mutation || !validId(mutation.id) || !validId(mutation.entityId) || !["settings", "category", "goal", "goalMove", "transaction", "transfer"].includes(mutation.kind)
     || !Number.isSafeInteger(mutation.baseVersion) || mutation.baseVersion < 0 || !mutation.payload || typeof mutation.payload !== "object") {
     return json({ error: "Неверный формат изменения." }, 400);
   }
@@ -127,11 +137,15 @@ export async function applyMutation(request: Request, env: Env): Promise<Respons
   let payload: SyncEntity;
 
   if (mutation.kind === "settings") {
-    if (mutation.entityId !== "main" || !Number.isSafeInteger(snapshot.openingBalanceKopeks) || Number(snapshot.openingBalanceKopeks) < 0 || !validDate(snapshot.startedAt)) return json({ error: "Неверные настройки." }, 400);
+    const cashGiven = snapshot.openingCashKopeks !== undefined;
+    if (mutation.entityId !== "main" || !Number.isSafeInteger(snapshot.openingBalanceKopeks) || Number(snapshot.openingBalanceKopeks) < 0 || !validDate(snapshot.startedAt)
+      || (cashGiven && snapshot.openingCashKopeks !== null && (!Number.isSafeInteger(snapshot.openingCashKopeks) || Number(snapshot.openingCashKopeks) < 0))) return json({ error: "Неверные настройки." }, 400);
     if (!current || (current as Settings).version !== mutation.baseVersion) return conflict(database, user, mutation, "Стартовый остаток уже изменён на другом устройстве.");
-    payload = { id: "main", openingBalanceKopeks: Number(snapshot.openingBalanceKopeks), startedAt: String(snapshot.startedAt), version };
-    statements.push(database.prepare("UPDATE settings SET opening_balance_kopeks = ?, started_at = ?, updated_at = ? WHERE user_id = ? AND changes() = 1")
-      .bind(payload.openingBalanceKopeks, payload.startedAt, now, user));
+    // Clients from before cash accounting do not send the field; their change keeps the stored cash amount.
+    const openingCash = cashGiven ? snapshot.openingCashKopeks as number | null : (current as Settings).openingCashKopeks ?? null;
+    payload = { id: "main", openingBalanceKopeks: Number(snapshot.openingBalanceKopeks), openingCashKopeks: openingCash, startedAt: String(snapshot.startedAt), version };
+    statements.push(database.prepare("UPDATE settings SET opening_balance_kopeks = ?, opening_cash_kopeks = ?, started_at = ?, updated_at = ? WHERE user_id = ? AND changes() = 1")
+      .bind(payload.openingBalanceKopeks, openingCash, payload.startedAt, now, user));
   } else if (mutation.kind === "category") {
     if (!validId(snapshot.id) || snapshot.id !== mutation.entityId || !["expense", "income"].includes(String(snapshot.type))
       || typeof snapshot.name !== "string" || !snapshot.name.trim() || snapshot.name.trim().length > 80
@@ -170,9 +184,24 @@ export async function applyMutation(request: Request, env: Env): Promise<Respons
       .bind(user, payload.id, payload.goalId, payload.amountKopeks, payload.occurredAt, payload.createdAt));
     entityType = "goal_move";
     version = 1;
+  } else if (mutation.kind === "transfer") {
+    if (current ? (current as Transfer).version !== mutation.baseVersion : mutation.baseVersion !== 0) return conflict(database, user, mutation, "Перевод уже изменён на другом устройстве.");
+    if (!validId(snapshot.id) || snapshot.id !== mutation.entityId || !validAccount(snapshot.from) || !validMoney(snapshot.amountKopeks)
+      || !validDate(snapshot.occurredAt) || !validDate(snapshot.createdAt) || (snapshot.author !== null && snapshot.author !== "self" && snapshot.author !== "wife")
+      || typeof snapshot.note !== "string" || snapshot.note.length > 500 || (snapshot.deletedAt != null && !validDate(snapshot.deletedAt))) return json({ error: "Неверные данные перевода." }, 400);
+    payload = { id: mutation.entityId, from: snapshot.from as Account, amountKopeks: Number(snapshot.amountKopeks), occurredAt: String(snapshot.occurredAt),
+      createdAt: String(snapshot.createdAt), author: snapshot.author as "self" | "wife" | null, note: String(snapshot.note),
+      deletedAt: snapshot.deletedAt as string | null, version };
+    if (current) {
+      statements.push(database.prepare("UPDATE transfers SET from_account = ?, amount_kopeks = ?, occurred_at = ?, updated_at = ?, author = ?, note = ?, deleted_at = ?, version = ? WHERE user_id = ? AND id = ? AND changes() = 1")
+        .bind(payload.from, payload.amountKopeks, payload.occurredAt, now, payload.author, payload.note, payload.deletedAt ?? null, version, user, payload.id));
+    } else {
+      statements.push(database.prepare("INSERT INTO transfers (user_id, id, from_account, amount_kopeks, occurred_at, created_at, updated_at, author, note, deleted_at, version) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE changes() = 1")
+        .bind(user, payload.id, payload.from, payload.amountKopeks, payload.occurredAt, payload.createdAt, now, payload.author, payload.note, payload.deletedAt ?? null, version));
+    }
   } else {
     if (current ? (current as FinanceTransaction).version !== mutation.baseVersion : mutation.baseVersion !== 0) return conflict(database, user, mutation, "Операция уже изменена на другом устройстве.");
-    if (!validId(snapshot.id) || snapshot.id !== mutation.entityId || !["expense", "income"].includes(String(snapshot.type)) || !validMoney(snapshot.amountKopeks) || !validId(snapshot.categoryId) || !validDate(snapshot.occurredAt) || !validDate(snapshot.createdAt) || (snapshot.author !== null && snapshot.author !== "self" && snapshot.author !== "wife") || typeof snapshot.note !== "string" || snapshot.note.length > 500 || (snapshot.goalId !== null && !validId(snapshot.goalId)) || (snapshot.goalId && snapshot.type !== "expense") || (snapshot.deletedAt != null && !validDate(snapshot.deletedAt))) return json({ error: "Неверные данные операции." }, 400);
+    if (!validId(snapshot.id) || snapshot.id !== mutation.entityId || !["expense", "income"].includes(String(snapshot.type)) || !validMoney(snapshot.amountKopeks) || !validId(snapshot.categoryId) || !validDate(snapshot.occurredAt) || !validDate(snapshot.createdAt) || (snapshot.author !== null && snapshot.author !== "self" && snapshot.author !== "wife") || typeof snapshot.note !== "string" || snapshot.note.length > 500 || (snapshot.goalId !== null && !validId(snapshot.goalId)) || (snapshot.goalId && snapshot.type !== "expense") || (snapshot.account !== undefined && !validAccount(snapshot.account)) || (snapshot.deletedAt != null && !validDate(snapshot.deletedAt))) return json({ error: "Неверные данные операции." }, 400);
     const category = await database.prepare("SELECT type FROM categories WHERE user_id = ? AND id = ? AND archived_at IS NULL").bind(user, snapshot.categoryId).first<{ type: string }>();
     if (!category || category.type !== snapshot.type) return conflict(database, user, mutation, "Категория не найдена в общем профиле.");
     if (snapshot.goalId) {
@@ -183,13 +212,14 @@ export async function applyMutation(request: Request, env: Env): Promise<Respons
     }
     payload = { id: mutation.entityId, type: snapshot.type as "expense" | "income", amountKopeks: Number(snapshot.amountKopeks), categoryId: String(snapshot.categoryId),
       occurredAt: String(snapshot.occurredAt), createdAt: String(snapshot.createdAt), author: snapshot.author as "self" | "wife" | null,
-      note: String(snapshot.note), goalId: snapshot.goalId as string | null, deletedAt: snapshot.deletedAt as string | null, version };
+      note: String(snapshot.note), goalId: snapshot.goalId as string | null, account: validAccount(snapshot.account) ? snapshot.account : "card",
+      deletedAt: snapshot.deletedAt as string | null, version };
     if (current) {
-      statements.push(database.prepare(`UPDATE transactions SET type = ?, amount_kopeks = ?, category_id = ?, occurred_at = ?, updated_at = ?, author = ?, note = ?, goal_id = ?, deleted_at = ?, version = ? WHERE user_id = ? AND id = ? AND changes() = 1`)
-        .bind(payload.type, payload.amountKopeks, payload.categoryId, payload.occurredAt, now, payload.author, payload.note, payload.goalId, payload.deletedAt ?? null, version, user, payload.id));
+      statements.push(database.prepare(`UPDATE transactions SET type = ?, amount_kopeks = ?, category_id = ?, occurred_at = ?, updated_at = ?, author = ?, note = ?, goal_id = ?, account = ?, deleted_at = ?, version = ? WHERE user_id = ? AND id = ? AND changes() = 1`)
+        .bind(payload.type, payload.amountKopeks, payload.categoryId, payload.occurredAt, now, payload.author, payload.note, payload.goalId, payload.account, payload.deletedAt ?? null, version, user, payload.id));
     } else {
-      statements.push(database.prepare(`INSERT INTO transactions (user_id, id, type, amount_kopeks, category_id, occurred_at, created_at, updated_at, author, note, goal_id, deleted_at, version) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE changes() = 1`)
-        .bind(user, payload.id, payload.type, payload.amountKopeks, payload.categoryId, payload.occurredAt, payload.createdAt, now, payload.author, payload.note, payload.goalId, payload.deletedAt ?? null, version));
+      statements.push(database.prepare(`INSERT INTO transactions (user_id, id, type, amount_kopeks, category_id, occurred_at, created_at, updated_at, author, note, goal_id, account, deleted_at, version) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE changes() = 1`)
+        .bind(user, payload.id, payload.type, payload.amountKopeks, payload.categoryId, payload.occurredAt, payload.createdAt, now, payload.author, payload.note, payload.goalId, payload.account, payload.deletedAt ?? null, version));
     }
   }
 
@@ -200,7 +230,7 @@ export async function applyMutation(request: Request, env: Env): Promise<Respons
     .bind(user, mutation.id, request.headers.get("X-Device-Id") ?? "unknown", mutation.kind, JSON.stringify(accepted), now, user, seq);
   const log = database.prepare(`INSERT INTO change_log (user_id, entity_type, entity_id, action, entity_json, changed_at)
     SELECT ?, ?, ?, ?, ?, ? WHERE changes() = 1`)
-    .bind(user, entityType, mutation.entityId, mutation.kind === "transaction" && (payload as FinanceTransaction).deletedAt ? "delete" : "upsert", JSON.stringify(payload), now);
+    .bind(user, entityType, mutation.entityId, (mutation.kind === "transaction" || mutation.kind === "transfer") && (payload as FinanceTransaction | Transfer).deletedAt ? "delete" : "upsert", JSON.stringify(payload), now);
   const results = await database.batch([reserve, ...statements, log]);
   if (results[0].meta.changes === 1) return json(accepted);
   const racedDuplicate = await database.prepare("SELECT result_json FROM mutations WHERE user_id = ? AND id = ?").bind(user, mutation.id).first<{ result_json: string }>();

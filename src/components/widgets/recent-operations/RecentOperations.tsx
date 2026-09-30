@@ -2,7 +2,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { SkeletonSwap } from "@/components/ui/skeleton-swap";
 import { SkeletonText } from "@/components/ui/skeleton-text";
-import { TransactionList, TransactionListSkeleton } from "@/components/ui/transaction-list";
+import { OperationList, OperationListSkeleton } from "@/components/ui/operation-list";
+import { activeOperations } from "@/finance";
 import { useLocalData } from "@/hooks/use-local-data";
 import type { LocalData } from "@/services/local-db";
 import type { RecentOperationsProps } from "./types";
@@ -11,12 +12,12 @@ const empty = { title: "Пока нет операций", description: "Доб�
 
 function recentModel(data: LocalData) {
   return {
-    entries: data.transactions.filter((entry) => !entry.deletedAt).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)).slice(0, 5),
+    operations: activeOperations(data.transactions, data.transfers).slice(0, 5),
     categoryName: (id: string) => data.categories.find((category) => category.id === id)?.name
   };
 }
 
-/** The five latest operations. */
+/** The five latest operations and transfers. */
 export function RecentOperations({ di, skeleton = false }: RecentOperationsProps) {
   const data = useLocalData(di);
   const model = data && recentModel(data);
@@ -24,15 +25,15 @@ export function RecentOperations({ di, skeleton = false }: RecentOperationsProps
     <SkeletonSwap loading={skeleton || !model} skeleton={() => (
       <section data-sk="recent" aria-hidden="true">
         <SectionHeading title={<SkeletonText sample="Последние записи" />} />
-        {!model ? <TransactionListSkeleton rows={3} />
-          : model.entries.length ? <TransactionListSkeleton entries={model.entries} categoryName={model.categoryName} />
+        {!model ? <OperationListSkeleton rows={3} />
+          : model.operations.length ? <OperationListSkeleton operations={model.operations} categoryName={model.categoryName} />
           : <EmptyState skeleton {...empty} />}
       </section>
     )}>
       {model && (
         <section data-sk="recent">
           <SectionHeading title="Последние записи" />
-          {model.entries.length ? <TransactionList entries={model.entries} categoryName={model.categoryName} /> : <EmptyState {...empty} />}
+          {model.operations.length ? <OperationList operations={model.operations} categoryName={model.categoryName} /> : <EmptyState {...empty} />}
         </section>
       )}
     </SkeletonSwap>

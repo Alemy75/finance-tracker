@@ -12,30 +12,35 @@ import type { OpeningSetupProps } from "./types";
 export function OpeningSetup({ di }: OpeningSetupProps) {
   const saveOpeningBalance = useMutation(di.saveOpeningBalance.mo());
   const [amount, setAmount] = useState("");
+  const [cash, setCash] = useState("");
   const [error, setError] = useState("");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const openingBalanceKopeks = parseMoney(amount);
-    if (openingBalanceKopeks === null) {
+    const openingCashKopeks = parseMoney(cash || "0");
+    if (openingBalanceKopeks === null || openingCashKopeks === null) {
       setError("Введите сумму в рублях, не более двух знаков после запятой.");
       return;
     }
     setError("");
     try {
-      await saveOpeningBalance.mutateAsync({ id: "main", openingBalanceKopeks, startedAt: new Date().toISOString() });
+      await saveOpeningBalance.mutateAsync({ id: "main", openingBalanceKopeks, openingCashKopeks, startedAt: new Date().toISOString() });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось сохранить сумму на устройстве. Проверьте доступ к хранилищу браузера.");
     }
   }
 
   return (
-    <SetupCard eyebrow="Первый шаг" title="Сколько сейчас на карте?"
-      description="Введите текущий остаток вашей карты. Это будет точка отсчёта; дальше остаток изменят доходы и расходы."
+    <SetupCard eyebrow="Первый шаг" title="Сколько сейчас денег?"
+      description="Введите текущий остаток карты и наличных. Это будет точка отсчёта; дальше остатки изменят доходы, расходы и переводы."
       footnote="Сумма сохранится на устройстве и после подключения появится в общем профиле.">
       <form className="grid gap-4" onSubmit={submit} noValidate>
-        <Field label="Стартовый капитал, ₽" htmlFor="opening-amount">
+        <Field label="На карте, ₽" htmlFor="opening-amount">
           <MoneyInput id="opening-amount" placeholder="Например, 50 000" value={amount} onChange={(event) => setAmount(event.target.value)} required />
+        </Field>
+        <Field label="Наличные, ₽" htmlFor="opening-cash" hint="Если наличных нет, оставьте поле пустым.">
+          <MoneyInput id="opening-cash" placeholder="0" value={cash} onChange={(event) => setCash(event.target.value)} />
         </Field>
         <FormError message={error} />
         <Button type="submit" size="lg" className="w-full" disabled={saveOpeningBalance.isPending}>{saveOpeningBalance.isPending ? "Сохраняем…" : "Начать учёт"}</Button>

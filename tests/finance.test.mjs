@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { allocatedTotal, cardBalance, expensesByCategory, freeBalance, goalBalance, parseMoney } from "../src/finance.ts";
+import { accountOf, allocatedTotal, cardBalance, cashBalance, expensesByCategory, freeBalance, goalBalance, parseMoney, totalBalance } from "../src/finance.ts";
 
 test("рубли переводятся в целые копейки без потери дробной части", () => {
   assert.equal(parseMoney("1 234,56"), 123456);
@@ -60,4 +60,39 @@ test("удалённый расход возвращает ранее выдел
   const transactions = [{ type: "expense", goalId: "holiday", amountKopeks: 12000,
     deletedAt: "2026-09-28T12:00:00.000Z" }];
   assert.equal(goalBalance("holiday", moves, transactions), 30000);
+});
+
+test("операция без счёта относится к карте", () => {
+  assert.equal(accountOf({ type: "expense", amountKopeks: 100 }), "card");
+  assert.equal(accountOf({ type: "expense", amountKopeks: 100, account: "cash" }), "cash");
+});
+
+test("наличные считаются от стартовой суммы с операциями наличными и переводами", () => {
+  const settings = { openingBalanceKopeks: 100000, openingCashKopeks: 5000 };
+  const transactions = [
+    { type: "expense", amountKopeks: 1500, account: "cash" },
+    { type: "income", amountKopeks: 2000, account: "cash" },
+    { type: "expense", amountKopeks: 30000 },
+    { type: "expense", amountKopeks: 700, account: "cash", deletedAt: "2026-09-30T10:00:00.000Z" }
+  ];
+  const transfers = [
+    { from: "card", amountKopeks: 10000 },
+    { from: "cash", amountKopeks: 4000 },
+    { from: "card", amountKopeks: 999, deletedAt: "2026-09-30T10:00:00.000Z" }
+  ];
+  assert.equal(cashBalance(settings, transactions, transfers), 5000 - 1500 + 2000 + 10000 - 4000);
+  assert.equal(cardBalance(settings, transactions, transfers), 100000 - 30000 - 10000 + 4000);
+  assert.equal(totalBalance(settings, transactions), 100000 + 5000 - 1500 + 2000 - 30000);
+});
+
+test("не указанные наличные считаются нулём", () => {
+  assert.equal(cashBalance({ openingBalanceKopeks: 100000, openingCashKopeks: null }, [], [{ from: "card", amountKopeks: 300 }]), 300);
+});
+
+test("свободная сумма включает наличные и не зависит от переводов", () => {
+  const settings = { openingBalanceKopeks: 100000, openingCashKopeks: 20000 };
+  const goals = [{ id: "trip" }];
+  const moves = [{ goalId: "trip", amountKopeks: 50000 }];
+  const transactions = [{ type: "expense", amountKopeks: 5000, account: "cash", goalId: "trip" }];
+  assert.equal(freeBalance(settings, goals, moves, transactions), 100000 + 20000 - 5000 - 45000);
 });

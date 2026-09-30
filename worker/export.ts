@@ -2,7 +2,7 @@ import { createAuth } from "./auth";
 import type { Env } from "./auth";
 import { ensureLedger } from "./account";
 
-const tables = ["settings", "categories", "goals", "goal_moves", "transactions", "mutations", "change_log"] as const;
+const tables = ["settings", "categories", "goals", "goal_moves", "transactions", "transfers", "mutations", "change_log"] as const;
 
 export async function exportLedger(request: Request, env: Env): Promise<Response> {
   const session = await createAuth(request, env).api.getSession({ headers: request.headers });

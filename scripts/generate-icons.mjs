@@ -7,10 +7,10 @@ const require = createRequire(import.meta.url);
 const icons = JSON.parse(readFileSync(require.resolve("feather-icons/dist/icons.json"), "utf8"));
 
 const names = [
-  "alert-circle", "alert-triangle", "arrow-down-left", "arrow-up-right", "check", "check-circle",
+  "alert-circle", "alert-triangle", "arrow-down-left", "arrow-right", "arrow-up-right", "check", "check-circle",
   "chevron-down", "chevron-left", "chevron-right", "clock", "credit-card", "download", "edit-2",
   "home", "inbox", "info", "key", "list", "loader", "lock", "log-out", "mail", "minus", "pie-chart",
-  "plus", "refresh-cw", "settings", "target", "trash-2", "user", "wifi", "wifi-off", "x"
+  "plus", "pocket", "refresh-cw", "repeat", "settings", "target", "trash-2", "user", "wifi", "wifi-off", "x"
 ];
 
 const toPascal = (name) => name.split("-").map((part) => part[0].toUpperCase() + part.slice(1)).join("");

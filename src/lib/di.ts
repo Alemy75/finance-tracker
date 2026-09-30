@@ -6,9 +6,11 @@ import { createCreateCategory, createRenameCategory } from "@/api/categories";
 import { createCreateGoal, createMoveGoalMoney } from "@/api/goals";
 import { createGetHealth } from "@/api/health";
 import { createGetLocalData, createGetOutbox, outboxKey } from "@/api/local-data";
-import { createSaveOpeningBalance } from "@/api/settings";
+import { createSaveOpeningBalance, createSaveOpeningCash } from "@/api/settings";
 import { createFetchBackup, createResolveConflict, createSynchronize } from "@/api/sync";
 import { createDeleteTransaction, createSaveTransaction, createUpdateTransaction } from "@/api/transactions";
+import { createDeleteTransfer, createSaveTransfer, createUpdateTransfer } from "@/api/transfers";
+import type { Account } from "@/finance";
 import type { Page } from "@/lib/pages";
 import { createContainer, type } from "@/lib/container";
 import type { ContainerOf } from "@/lib/container";
@@ -21,6 +23,7 @@ import { createOnlineAtom } from "@/services/online";
 import { createSyncEngine } from "@/services/sync-engine";
 
 const AUTH_MARKER = "family-finance-authenticated";
+const LAST_ACCOUNT = "family-finance-last-account";
 
 export type Di = ContainerOf<ReturnType<typeof createDi>>;
 
@@ -38,7 +41,12 @@ export function createDi() {
       $page: () => atom<Page>("home"),
       $online: () => createOnlineAtom(),
       /** Id of the user who last signed in on this device; lets the app open the local copy without network. */
-      $authMarker: () => persistentAtom<string | undefined>(AUTH_MARKER, undefined)
+      $authMarker: () => persistentAtom<string | undefined>(AUTH_MARKER, undefined),
+      /** Account last chosen in quick entry; remembered per device. */
+      $lastAccount: () => persistentAtom<Account>(LAST_ACCOUNT, "card", {
+        encode: (value) => value,
+        decode: (value) => value === "cash" ? "cash" : "card"
+      })
     })
     .provide({
       getAccountStatus: createGetAccountStatus,
@@ -76,6 +84,10 @@ export function createDi() {
         }
       }),
       saveOpeningBalance: createSaveOpeningBalance,
+      saveOpeningCash: createSaveOpeningCash,
+      saveTransfer: createSaveTransfer,
+      updateTransfer: createUpdateTransfer,
+      deleteTransfer: createDeleteTransfer,
       saveTransaction: createSaveTransaction,
       updateTransaction: createUpdateTransaction,
       deleteTransaction: createDeleteTransaction,

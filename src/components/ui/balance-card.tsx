@@ -1,16 +1,25 @@
+import type { ComponentType } from "react";
 import { AnimatedMoney } from "@/components/ui/animated-money";
-import { IconCreditCard, IconTarget } from "@/components/ui/icons";
+import { IconCreditCard, IconPocket, IconTarget } from "@/components/ui/icons";
+import type { IconProps } from "@/components/ui/icons";
 import { SkeletonText } from "@/components/ui/skeleton-text";
 import { formatMoney } from "@/finance";
 import { cn } from "@/lib/utils";
 
 export interface BalanceValues {
   free: number;
-  balance: number;
+  card: number;
+  cash: number;
   allocated: number;
 }
 
-const sampleValues: BalanceValues = { free: 8_432_000, balance: 12_000_000, allocated: 3_568_000 };
+const sampleValues: BalanceValues = { free: 8_432_000, card: 11_000_000, cash: 1_000_000, allocated: 3_568_000 };
+
+const rows: { key: Exclude<keyof BalanceValues, "free">; label: string; icon: ComponentType<IconProps> }[] = [
+  { key: "card", label: "На карте", icon: IconCreditCard },
+  { key: "cash", label: "Наличные", icon: IconPocket },
+  { key: "allocated", label: "В целях", icon: IconTarget }
+];
 
 /** Hero balance card. With `skeleton` the amounts become placeholders of the same size. */
 export function BalanceCard({ values, skeleton = false, size = "hero", className }: {
@@ -31,16 +40,14 @@ export function BalanceCard({ values, skeleton = false, size = "hero", className
       <strong className={cn("mt-1 block font-extrabold tracking-[-0.035em]", hero ? "text-[40px] leading-[48px]" : "text-[30px] leading-9")}>
         {money("free")}
       </strong>
-      <div className={cn("flex justify-between gap-4 border-t border-white/12 pt-4", hero ? "mt-5" : "mt-4")}>
-        <div className="grid gap-1">
-          <span className="flex items-center gap-1.5 text-[13px] text-on-forest-muted"><IconCreditCard className="size-3.5" />На карте</span>
-          <strong className="text-base leading-6 font-bold">{money("balance")}</strong>
-        </div>
-        <div className="grid justify-items-end gap-1 text-right">
-          <span className="flex items-center gap-1.5 text-[13px] text-on-forest-muted"><IconTarget className="size-3.5" />В целях</span>
-          <strong className="text-base leading-6 font-bold">{money("allocated")}</strong>
-        </div>
-      </div>
+      <dl className={cn("grid gap-2 border-t border-white/12 pt-4", hero ? "mt-5" : "mt-4")}>
+        {rows.map(({ key, label, icon: Icon }) => (
+          <div key={key} className="flex items-baseline justify-between gap-4">
+            <dt className="flex items-center gap-1.5 self-center text-[13px] text-on-forest-muted"><Icon className="size-3.5" />{label}</dt>
+            <dd className="tabular text-[15px] leading-6 font-bold whitespace-nowrap">{money(key)}</dd>
+          </div>
+        ))}
+      </dl>
     </section>
   );
 }

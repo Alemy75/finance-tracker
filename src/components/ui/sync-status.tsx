@@ -58,7 +58,8 @@ const kindLabel: Record<PendingMutation["kind"], string> = {
   category: "категория",
   goalMove: "движение цели",
   goal: "цель",
-  settings: "стартовый остаток"
+  settings: "стартовый остаток",
+  transfer: "перевод"
 };
 
 export function ConflictCard({ mutation, onResolve }: {
