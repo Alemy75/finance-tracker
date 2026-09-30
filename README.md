@@ -35,11 +35,11 @@ pnpm preview
 
 ## Интерфейс
 
-Компоненты интерфейса находятся в `src/components/ui/` (UI Kit на shadcn/ui) и `src/components/app/`, экраны и их скелетоны — в `src/screens/`. Новые компоненты shadcn добавляются командой `pnpm dlx shadcn@latest add <имя>`; иконки в них заменяются на Feather из `@/components/ui/icons`. Чтобы добавить иконку Feather, впишите её имя в `scripts/generate-icons.mjs` и выполните `node scripts/generate-icons.mjs`.
+Клиент устроен по соглашениям проекта mfa: сервисы собираются в DI-контейнере `src/lib/di.ts`, запросы и локальные данные идут через TanStack Query (`src/api/`), глобальное состояние — атомы nanostores. Интерфейс разбит на слои `ui`, `smart`, `widgets` и `pages` в `src/components/` (правила — в [src/components/README.md](src/components/README.md)). Новые компоненты shadcn добавляются командой `pnpm dlx shadcn@latest add <имя>`; иконки в них заменяются на Feather из `@/components/ui/icons`. Чтобы добавить иконку Feather, впишите её имя в `scripts/generate-icons.mjs` и выполните `node scripts/generate-icons.mjs`.
 
 Иконки приложения рисуются из `assets/icon.svg` командой `node scripts/generate-pwa-icons.mjs`: исходник — квадрат во всю площадь, скругление делает сама система.
 
-При локальном запуске `http://127.0.0.1:5173/?skeleton` накладывает скелетон текущего раздела поверх контента: так удобно проверить, что после изменения разметки скелетон по-прежнему совпадает с экраном. Параметр `?instant` завершает анимации сразу.
+При локальном запуске `http://127.0.0.1:5173/?skeleton` накладывает скелетон каждого виджета поверх его контента: так удобно проверить, что после изменения разметки скелетон по-прежнему совпадает с экраном. Параметр `?instant` завершает анимации сразу.
 
 ## Резервная копия и восстановление
 
