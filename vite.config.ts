@@ -1,11 +1,17 @@
+import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
+  resolve: {
+    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) }
+  },
   plugins: [
     react(),
+    tailwindcss(),
     cloudflare(process.env.FINANCE_TEST_STATE_DIR ? { persistState: { path: process.env.FINANCE_TEST_STATE_DIR } } : {}),
     VitePWA({
       registerType: "autoUpdate",
@@ -18,8 +24,8 @@ export default defineConfig({
         start_url: "/",
         scope: "/",
         display: "standalone",
-        background_color: "#f4f5f7",
-        theme_color: "#46746a",
+        background_color: "#f5f3ee",
+        theme_color: "#1f3d36",
         icons: [
           { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png" }
@@ -27,7 +33,7 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: "/index.html",
-        globPatterns: ["**/*.{js,css,html,png,svg,webmanifest}"]
+        globPatterns: ["**/*.{js,css,html,png,svg,webmanifest,woff2}"]
       }
     })
   ]
