@@ -4,6 +4,7 @@ import { getAccountStatus, signOut } from "./authClient";
 import { History } from "./History";
 import { Goals } from "./Goals";
 import { SettingsPage } from "./SettingsPage";
+import { TbankImportPanel } from "./TbankImportPanel";
 import { allocatedTotal, cardBalance, expensesByCategory, formatMoney, freeBalance, goalBalance, parseMoney } from "./finance";
 import type { Author, Category, FinanceTransaction, Goal, GoalMove, Settings, TransactionType } from "./finance";
 import { deleteFinanceTransaction, loadLocalData, loadOutbox, renameCategory, retryLocalVersion, saveCategory, saveFinanceTransaction, saveGoal, saveGoalMove, saveOpeningBalance, updateFinanceTransaction, useRemoteVersion } from "./localData";
@@ -484,7 +485,7 @@ export default function App() {
     void refreshQueueAndSync();
   }
 
-  async function saveEntry(entry: FinanceTransaction) {
+  async function saveEntry(entry: FinanceTransaction, bankImport = false) {
     if (entry.goalId) {
       if (entry.type !== "expense" || !data?.goals.some((goal) => goal.id === entry.goalId && !goal.archivedAt)) {
         throw new Error("Выберите существующую цель для расхода.");
@@ -493,8 +494,9 @@ export default function App() {
         throw new Error("На этой цели недостаточно выделенных денег.");
       }
     }
-    await saveFinanceTransaction(entry);
-    setData((current) => current ? { ...current, transactions: [...current.transactions, { ...entry, version: 1 }] } : current);
+    await saveFinanceTransaction(entry, bankImport);
+    setData((current) => current && !current.transactions.some((item) => item.id === entry.id)
+      ? { ...current, transactions: [...current.transactions, { ...entry, version: 1 }] } : current);
     void refreshQueueAndSync();
   }
 
@@ -591,7 +593,10 @@ export default function App() {
           ) : (
             <>
               {page === "home" && <Home data={data} onSave={saveEntry} onGoToGoals={() => setPage("goals")} />}
-              {page === "history" && <History data={data} onUpdate={updateEntry} onDelete={deleteEntry} />}
+              {page === "history" && <>
+                <TbankImportPanel categories={data.categories} transactions={data.transactions} onSave={(entry) => saveEntry(entry, true)} />
+                <History data={data} onUpdate={updateEntry} onDelete={deleteEntry} />
+              </>}
               {page === "goals" && <Goals data={data} onCreate={createGoal} onMove={moveGoalMoney} />}
               {page === "settings" && <SettingsPage categories={data.categories} online={authState === "authenticated" && connection === "online"}
                 syncing={syncing} onCreateCategory={createCategory} onRenameCategory={renameCategoryName} onExport={handleExport} />}

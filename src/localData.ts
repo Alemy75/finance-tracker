@@ -1,6 +1,8 @@
 import { initialCategories } from "./finance";
 import type { Category, FinanceTransaction, Goal, GoalMove, Settings } from "./finance";
 import type { PendingMutation, SyncEntity, SyncKind, SyncSnapshot } from "./syncTypes";
+import { mergeBankInbox } from "./tbankImport";
+import type { BankInbox, BankOperation } from "./tbankImport";
 
 export interface LocalData {
   settings: Settings | null;
@@ -11,7 +13,8 @@ export interface LocalData {
 }
 
 const DATABASE_NAME = "family-finance-local";
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
+const BANK_INBOX_KEY = "tbank";
 let databasePromise: Promise<IDBDatabase> | null = null;
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -56,6 +59,7 @@ function openDatabase(): Promise<IDBDatabase> {
         if (!database.objectStoreNames.contains("outbox")) {
           database.createObjectStore("outbox", { keyPath: "sequence", autoIncrement: true });
         }
+        if (event.oldVersion < 4) database.createObjectStore("bankInbox");
         if (event.oldVersion > 0 && event.oldVersion < 3) {
           const outbox = upgrade.objectStore("outbox");
           const queueLegacy = (kind: SyncKind, entity: SyncEntity, entityId: string) => {
@@ -79,7 +83,11 @@ function openDatabase(): Promise<IDBDatabase> {
           };
         }
       };
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        const database = request.result;
+        database.onversionchange = () => { database.close(); databasePromise = null; };
+        resolve(database);
+      };
       request.onerror = () => reject(request.error);
       request.onblocked = () => reject(new Error("Закройте другие вкладки приложения и попробуйте снова."));
     }).catch((error: unknown) => {
@@ -138,13 +146,46 @@ export async function renameCategory(category: Category): Promise<Category> {
   return saved;
 }
 
-export async function saveFinanceTransaction(entry: FinanceTransaction): Promise<void> {
+export async function loadBankInbox(): Promise<BankInbox | undefined> {
   const database = await openDatabase();
-  const transaction = database.transaction(["transactions", "outbox"], "readwrite");
+  const store = database.transaction("bankInbox", "readonly").objectStore("bankInbox");
+  return requestResult<BankInbox | undefined>(store.get(BANK_INBOX_KEY));
+}
+
+export async function importBankOperations(boundary: BankOperation, operations: BankOperation[]): Promise<BankInbox> {
+  const database = await openDatabase();
+  const transaction = database.transaction(["bankInbox", "transactions"], "readwrite");
+  const store = transaction.objectStore("bankInbox");
+  const [, inbox] = await Promise.all([
+    transactionComplete(transaction),
+    Promise.all([
+      requestResult<BankInbox | undefined>(store.get(BANK_INBOX_KEY)),
+      requestResult(transaction.objectStore("transactions").getAllKeys())
+    ]).then(([current, keys]) => {
+      const inbox = mergeBankInbox(current, boundary, operations, new Set(keys.map(String)));
+      store.put(inbox, BANK_INBOX_KEY);
+      return inbox;
+    })
+  ]);
+  return inbox;
+}
+
+export async function saveFinanceTransaction(entry: FinanceTransaction, bankImport = false): Promise<void> {
+  const database = await openDatabase();
+  const stores = bankImport ? ["transactions", "outbox", "bankInbox"] : ["transactions", "outbox"];
+  const transaction = database.transaction(stores, "readwrite");
   const complete = transactionComplete(transaction);
   const saved = { ...entry, version: 1 };
   transaction.objectStore("transactions").add(saved);
-  enqueue(transaction, "transaction", entry.id, 0, saved);
+  enqueue(transaction, "transaction", entry.id, 0, saved, bankImport ? entry.id : undefined);
+  if (bankImport) {
+    const store = transaction.objectStore("bankInbox");
+    const request = store.get(BANK_INBOX_KEY);
+    request.onsuccess = () => {
+      const inbox = request.result as BankInbox | undefined;
+      if (inbox) store.put({ ...inbox, operations: inbox.operations.filter((item) => item.id !== entry.id) }, BANK_INBOX_KEY);
+    };
+  }
   await complete;
 }
 
@@ -183,8 +224,8 @@ export async function saveGoalMove(move: GoalMove): Promise<void> {
   await complete;
 }
 
-function enqueue(transaction: IDBTransaction, kind: SyncKind, entityId: string, baseVersion: number, payload: SyncEntity): void {
-  transaction.objectStore("outbox").add({ id: crypto.randomUUID(), kind, entityId, baseVersion, payload, state: "pending" } satisfies PendingMutation);
+function enqueue(transaction: IDBTransaction, kind: SyncKind, entityId: string, baseVersion: number, payload: SyncEntity, id: string = crypto.randomUUID()): void {
+  transaction.objectStore("outbox").add({ id, kind, entityId, baseVersion, payload, state: "pending" } satisfies PendingMutation);
 }
 
 export async function loadOutbox(): Promise<PendingMutation[]> {
