@@ -1,0 +1,354 @@
+import { initialCategories } from "@/finance";
+import type { Category, FinanceTransaction, Goal, GoalMove, Settings, Transfer } from "@/finance";
+import type { PendingMutation, SyncEntity, SyncKind, SyncSnapshot } from "@/syncTypes";
+import { mergeBankInbox } from "@/tbankImport";
+import type { BankInbox, BankOperation } from "@/tbankImport";
+
+export interface LocalData {
+  settings: Settings | null;
+  categories: Category[];
+  transactions: FinanceTransaction[];
+  goals: Goal[];
+  goalMoves: GoalMove[];
+  transfers: Transfer[];
+}
+
+const DATABASE_NAME = "family-finance-local";
+const DATABASE_VERSION = 5;
+const BANK_INBOX_KEY = "tbank";
+
+function requestResult<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function transactionComplete(transaction: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error ?? new Error("Изменение данных отменено."));
+    transaction.onerror = () => reject(transaction.error ?? new Error("Не удалось сохранить данные."));
+  });
+}
+
+export type LocalDb = ReturnType<typeof createLocalDb>;
+
+/** IndexedDB storage of the family data and the outbox of changes waiting for sync. */
+export function createLocalDb() {
+  let databasePromise: Promise<IDBDatabase> | null = null;
+
+  function openDatabase(): Promise<IDBDatabase> {
+    if (!databasePromise) {
+      const opening = new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+
+        request.onupgradeneeded = (event) => {
+          const database = request.result;
+          const upgrade = request.transaction!;
+          if (!database.objectStoreNames.contains("settings")) {
+            database.createObjectStore("settings", { keyPath: "id" });
+          }
+          if (!database.objectStoreNames.contains("categories")) {
+            const store = database.createObjectStore("categories", { keyPath: "id" });
+            for (const category of initialCategories) store.add(category);
+          }
+          if (!database.objectStoreNames.contains("transactions")) {
+            database.createObjectStore("transactions", { keyPath: "id" });
+          }
+          if (!database.objectStoreNames.contains("goals")) {
+            database.createObjectStore("goals", { keyPath: "id" });
+          }
+          if (!database.objectStoreNames.contains("goalMoves")) {
+            database.createObjectStore("goalMoves", { keyPath: "id" });
+          }
+          if (!database.objectStoreNames.contains("transfers")) {
+            database.createObjectStore("transfers", { keyPath: "id" });
+          }
+          if (!database.objectStoreNames.contains("outbox")) {
+            database.createObjectStore("outbox", { keyPath: "sequence", autoIncrement: true });
+          }
+          if (!database.objectStoreNames.contains("bankInbox")) {
+            database.createObjectStore("bankInbox");
+          }
+          if (event.oldVersion > 0 && event.oldVersion < 3) {
+            const outbox = upgrade.objectStore("outbox");
+            const queueLegacy = (kind: SyncKind, entity: SyncEntity, entityId: string) => {
+              outbox.add({ id: crypto.randomUUID(), kind, entityId, baseVersion: 0, payload: entity, state: "pending" } satisfies PendingMutation);
+            };
+            const settingRequest = upgrade.objectStore("settings").get("main");
+            settingRequest.onsuccess = () => {
+              if (settingRequest.result) queueLegacy("settings", settingRequest.result as Settings, "main");
+              const goalsRequest = upgrade.objectStore("goals").getAll();
+              goalsRequest.onsuccess = () => {
+                for (const goal of goalsRequest.result as Goal[]) queueLegacy("goal", goal, goal.id);
+                const movesRequest = upgrade.objectStore("goalMoves").getAll();
+                movesRequest.onsuccess = () => {
+                  for (const move of movesRequest.result as GoalMove[]) queueLegacy("goalMove", move, move.id);
+                  const entriesRequest = upgrade.objectStore("transactions").getAll();
+                  entriesRequest.onsuccess = () => {
+                    for (const entry of entriesRequest.result as FinanceTransaction[]) queueLegacy("transaction", entry, entry.id);
+                  };
+                };
+              };
+            };
+          }
+        };
+        request.onsuccess = () => {
+          const database = request.result;
+          database.onversionchange = () => { database.close(); databasePromise = null; };
+          resolve(database);
+        };
+        request.onerror = () => reject(request.error);
+        request.onblocked = () => reject(new Error("Закройте другие вкладки приложения и попробуйте снова."));
+      }).catch((error: unknown) => {
+        databasePromise = null;
+        throw error;
+      });
+      databasePromise = opening;
+      return opening;
+    }
+    return databasePromise;
+  }
+
+  async function loadLocalData(): Promise<LocalData> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["settings", "categories", "transactions", "goals", "goalMoves", "transfers"], "readonly");
+    const [settings, categories, transactions, goals, goalMoves, transfers] = await Promise.all([
+      requestResult<Settings | undefined>(transaction.objectStore("settings").get("main")),
+      requestResult<Category[]>(transaction.objectStore("categories").getAll()),
+      requestResult<FinanceTransaction[]>(transaction.objectStore("transactions").getAll()),
+      requestResult<Goal[]>(transaction.objectStore("goals").getAll()),
+      requestResult<GoalMove[]>(transaction.objectStore("goalMoves").getAll()),
+      requestResult<Transfer[]>(transaction.objectStore("transfers").getAll())
+    ]);
+    return { settings: settings ?? null, categories, transactions, goals, goalMoves, transfers };
+  }
+
+  async function saveOpeningBalance(settings: Settings): Promise<void> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["settings", "outbox"], "readwrite");
+    const complete = transactionComplete(transaction);
+    const saved = { ...settings, version: 1 };
+    transaction.objectStore("settings").add(saved);
+    enqueue(transaction, "settings", "main", 0, saved);
+    await complete;
+  }
+
+  /** Versioned update of the settings, used to enter or correct the starting cash. */
+  async function updateSettings(settings: Settings): Promise<Settings> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["settings", "outbox"], "readwrite");
+    const complete = transactionComplete(transaction);
+    const baseVersion = settings.version ?? 1;
+    const saved = { ...settings, version: baseVersion + 1 };
+    transaction.objectStore("settings").put(saved);
+    enqueue(transaction, "settings", "main", baseVersion, saved);
+    await complete;
+    return saved;
+  }
+
+  async function saveTransfer(transfer: Transfer): Promise<Transfer> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["transfers", "outbox"], "readwrite");
+    const complete = transactionComplete(transaction);
+    const saved = { ...transfer, version: 1 };
+    transaction.objectStore("transfers").add(saved);
+    enqueue(transaction, "transfer", transfer.id, 0, saved);
+    await complete;
+    return saved;
+  }
+
+  /** Correction or soft deletion (`deletedAt`) of a transfer. */
+  async function updateTransfer(transfer: Transfer): Promise<Transfer> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["transfers", "outbox"], "readwrite");
+    const complete = transactionComplete(transaction);
+    const baseVersion = transfer.version ?? 1;
+    const saved = { ...transfer, version: baseVersion + 1 };
+    transaction.objectStore("transfers").put(saved);
+    enqueue(transaction, "transfer", transfer.id, baseVersion, saved);
+    await complete;
+    return saved;
+  }
+
+  async function saveCategory(category: Category): Promise<Category> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["categories", "outbox"], "readwrite");
+    const complete = transactionComplete(transaction);
+    const saved = { ...category, version: 1 };
+    transaction.objectStore("categories").add(saved);
+    enqueue(transaction, "category", category.id, 0, saved);
+    await complete;
+    return saved;
+  }
+
+  async function renameCategory(category: Category): Promise<Category> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["categories", "outbox"], "readwrite");
+    const complete = transactionComplete(transaction);
+    const baseVersion = category.version ?? 1;
+    const saved = { ...category, version: baseVersion + 1 };
+    transaction.objectStore("categories").put(saved);
+    enqueue(transaction, "category", category.id, baseVersion, saved);
+    await complete;
+    return saved;
+  }
+
+  async function loadBankInbox(): Promise<BankInbox | null> {
+    const database = await openDatabase();
+    const store = database.transaction("bankInbox", "readonly").objectStore("bankInbox");
+    return (await requestResult<BankInbox | undefined>(store.get(BANK_INBOX_KEY))) ?? null;
+  }
+
+  async function importBankOperations(boundary: BankOperation, operations: BankOperation[]): Promise<BankInbox> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["bankInbox", "transactions"], "readwrite");
+    const store = transaction.objectStore("bankInbox");
+    const [, inbox] = await Promise.all([
+      transactionComplete(transaction),
+      Promise.all([
+        requestResult<BankInbox | undefined>(store.get(BANK_INBOX_KEY)),
+        requestResult(transaction.objectStore("transactions").getAllKeys())
+      ]).then(([current, keys]) => {
+        const updated = mergeBankInbox(current, boundary, operations, new Set(keys.map(String)));
+        store.put(updated, BANK_INBOX_KEY);
+        return updated;
+      })
+    ]);
+    return inbox;
+  }
+
+  async function saveFinanceTransaction(entry: FinanceTransaction, bankImport = false): Promise<void> {
+    const database = await openDatabase();
+    const stores = bankImport ? ["transactions", "outbox", "bankInbox"] : ["transactions", "outbox"];
+    const transaction = database.transaction(stores, "readwrite");
+    const complete = transactionComplete(transaction);
+    const saved = { ...entry, version: 1 };
+    transaction.objectStore("transactions").add(saved);
+    enqueue(transaction, "transaction", entry.id, 0, saved, bankImport ? entry.id : undefined);
+    if (bankImport) {
+      const store = transaction.objectStore("bankInbox");
+      const request = store.get(BANK_INBOX_KEY);
+      request.onsuccess = () => {
+        const inbox = request.result as BankInbox | undefined;
+        if (inbox) store.put({ ...inbox, operations: inbox.operations.filter((item) => item.id !== entry.id) }, BANK_INBOX_KEY);
+      };
+    }
+    await complete;
+  }
+
+  async function updateFinanceTransaction(entry: FinanceTransaction): Promise<FinanceTransaction> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["transactions", "outbox"], "readwrite");
+    const complete = transactionComplete(transaction);
+    const baseVersion = entry.version ?? 1;
+    const saved = { ...entry, version: baseVersion + 1 };
+    transaction.objectStore("transactions").put(saved);
+    enqueue(transaction, "transaction", entry.id, baseVersion, saved);
+    await complete;
+    return saved;
+  }
+
+  async function deleteFinanceTransaction(entry: FinanceTransaction): Promise<FinanceTransaction> {
+    return updateFinanceTransaction(entry);
+  }
+
+  async function saveGoal(goal: Goal): Promise<void> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["goals", "outbox"], "readwrite");
+    const complete = transactionComplete(transaction);
+    const saved = { ...goal, version: 1 };
+    transaction.objectStore("goals").add(saved);
+    enqueue(transaction, "goal", goal.id, 0, saved);
+    await complete;
+  }
+
+  async function saveGoalMove(move: GoalMove): Promise<void> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["goalMoves", "outbox"], "readwrite");
+    const complete = transactionComplete(transaction);
+    transaction.objectStore("goalMoves").add(move);
+    enqueue(transaction, "goalMove", move.id, 0, move);
+    await complete;
+  }
+
+  function enqueue(transaction: IDBTransaction, kind: SyncKind, entityId: string, baseVersion: number, payload: SyncEntity, id: string = crypto.randomUUID()): void {
+    transaction.objectStore("outbox").add({ id, kind, entityId, baseVersion, payload, state: "pending" } satisfies PendingMutation);
+  }
+
+  async function loadOutbox(): Promise<PendingMutation[]> {
+    const database = await openDatabase();
+    return requestResult<PendingMutation[]>(database.transaction("outbox", "readonly").objectStore("outbox").getAll());
+  }
+
+  async function removeMutation(sequence: number): Promise<void> {
+    const database = await openDatabase();
+    const transaction = database.transaction("outbox", "readwrite");
+    const complete = transactionComplete(transaction);
+    transaction.objectStore("outbox").delete(sequence);
+    await complete;
+  }
+
+  async function markMutationConflict(mutation: PendingMutation, reason: string, remote: SyncEntity | null): Promise<void> {
+    const database = await openDatabase();
+    const transaction = database.transaction("outbox", "readwrite");
+    const complete = transactionComplete(transaction);
+    transaction.objectStore("outbox").put({ ...mutation, state: "conflict", reason, remote });
+    await complete;
+  }
+
+  async function applyRemoteSnapshot(snapshot: SyncSnapshot, protectedEntities: Set<string>): Promise<void> {
+    const database = await openDatabase();
+    const transaction = database.transaction(["settings", "categories", "transactions", "goals", "goalMoves", "transfers"], "readwrite");
+    const complete = transactionComplete(transaction);
+    for (const transfer of snapshot.transfers ?? []) if (!protectedEntities.has(`transfer:${transfer.id}`)) transaction.objectStore("transfers").put(transfer);
+    if (snapshot.settings && !protectedEntities.has("settings:main")) transaction.objectStore("settings").put(snapshot.settings);
+    for (const category of snapshot.categories) if (!protectedEntities.has(`category:${category.id}`)) transaction.objectStore("categories").put(category);
+    for (const goal of snapshot.goals) if (!protectedEntities.has(`goal:${goal.id}`)) transaction.objectStore("goals").put(goal);
+    for (const move of snapshot.goalMoves) if (!protectedEntities.has(`goalMove:${move.id}`)) transaction.objectStore("goalMoves").put(move);
+    for (const entry of snapshot.transactions) if (!protectedEntities.has(`transaction:${entry.id}`)) transaction.objectStore("transactions").put(entry);
+    await complete;
+  }
+
+  function storeName(kind: SyncKind): string {
+    return kind === "settings" ? "settings" : kind === "category" ? "categories" : kind === "goal" ? "goals"
+      : kind === "goalMove" ? "goalMoves" : kind === "transfer" ? "transfers" : "transactions";
+  }
+
+  async function acceptRemoteVersion(mutation: PendingMutation): Promise<void> {
+    const related = (await loadOutbox()).filter((item) => item.kind === mutation.kind && item.entityId === mutation.entityId);
+    const database = await openDatabase();
+    const transaction = database.transaction(["outbox", storeName(mutation.kind)], "readwrite");
+    const complete = transactionComplete(transaction);
+    for (const item of related) transaction.objectStore("outbox").delete(item.sequence!);
+    const store = transaction.objectStore(storeName(mutation.kind));
+    if (mutation.remote) store.put(mutation.remote);
+    else store.delete(mutation.entityId);
+    await complete;
+  }
+
+  async function retryLocalVersion(mutation: PendingMutation): Promise<void> {
+    const related = (await loadOutbox()).filter((item) => item.kind === mutation.kind && item.entityId === mutation.entityId);
+    const database = await openDatabase();
+    const store = database.transaction(storeName(mutation.kind), "readonly").objectStore(storeName(mutation.kind));
+    const local = await requestResult<SyncEntity | undefined>(store.get(mutation.entityId));
+    if (!local) throw new Error("Локальная запись не найдена.");
+    const versioned = mutation.kind === "transaction" || mutation.kind === "transfer" || mutation.kind === "settings" || mutation.kind === "category";
+    const baseVersion = versioned ? Number((mutation.remote as { version?: number } | null)?.version ?? 0) : 0;
+    const payload = versioned
+      ? { ...local, version: baseVersion + 1 } as SyncEntity : local;
+    const transaction = database.transaction(["outbox", storeName(mutation.kind)], "readwrite");
+    const complete = transactionComplete(transaction);
+    for (const item of related) transaction.objectStore("outbox").delete(item.sequence!);
+    transaction.objectStore(storeName(mutation.kind)).put(payload);
+    enqueue(transaction, mutation.kind, mutation.entityId, baseVersion, payload);
+    await complete;
+  }
+
+  return {
+    loadLocalData, saveOpeningBalance, updateSettings, saveTransfer, updateTransfer, saveCategory, renameCategory, saveFinanceTransaction, updateFinanceTransaction,
+    deleteFinanceTransaction, saveGoal, saveGoalMove, loadOutbox, removeMutation, markMutationConflict, applyRemoteSnapshot,
+    acceptRemoteVersion, retryLocalVersion, loadBankInbox, importBankOperations
+  };
+}
